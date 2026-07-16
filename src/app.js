@@ -306,6 +306,10 @@ function num(value) {
   return Number(value) || 0;
 }
 
+function inputValue(value) {
+  return escapeHtml(value ?? "");
+}
+
 function accountRub(account) {
   return num(account.balance) * num(account.rate);
 }
@@ -574,6 +578,7 @@ function renderGoodsCard(item) {
             ? `<button class="arrive-button" type="button" data-arrive-jump="${item.id}">Принять</button>`
             : ""
         }
+        <button class="small-button" type="button" data-edit-goods="${item.id}">Редактировать</button>
         <button class="delete-button" type="button" data-delete-goods="${item.id}" title="Удалить">×</button>
       </div>
     </div>
@@ -589,9 +594,9 @@ function renderPhotoGallery(item) {
         .map(
           (photo) => `
             <figure class="photo-thumb">
-              <button class="photo-open" type="button" data-open-photo="${item.id}:${photo.id}" title="Открыть фото">
-                <img src="${photo.src}" alt="${escapeHtml(item.sku)}" />
-              </button>
+              <a class="photo-open" href="${escapeHtml(photo.src)}" target="_blank" rel="noopener" data-open-photo="${item.id}:${photo.id}" title="Открыть фото">
+                <img src="${escapeHtml(photo.src)}" alt="${escapeHtml(item.sku)}" />
+              </a>
               <button class="photo-remove" type="button" data-remove-photo="${item.id}:${photo.id}" title="Удалить фото">×</button>
             </figure>
           `,
@@ -650,9 +655,9 @@ function renderArrivalPhotos(arrival) {
         .map(
           (photo) => `
             <figure class="photo-thumb">
-              <button class="photo-open" type="button" data-open-arrival-photo="${arrival.id}:${photo.id}" title="Открыть фото">
-                <img src="${photo.src}" alt="Фото прибытия" />
-              </button>
+              <a class="photo-open" href="${escapeHtml(photo.src)}" target="_blank" rel="noopener" data-open-arrival-photo="${arrival.id}:${photo.id}" title="Открыть фото">
+                <img src="${escapeHtml(photo.src)}" alt="Фото прибытия" />
+              </a>
             </figure>
           `,
         )
@@ -939,7 +944,7 @@ function openPhotoViewer(src, title = "Фото") {
   viewer.className = "photo-viewer";
   viewer.innerHTML = `
     <button class="photo-viewer-close" type="button" title="Закрыть">×</button>
-    <img src="${src}" alt="${escapeHtml(title)}" />
+    <img src="${escapeHtml(src)}" alt="${escapeHtml(title)}" />
   `;
   viewer.addEventListener("click", (event) => {
     if (event.target === viewer || event.target.closest(".photo-viewer-close")) {
@@ -947,6 +952,151 @@ function openPhotoViewer(src, title = "Фото") {
     }
   });
   document.body.append(viewer);
+}
+
+function openGoodsEditor(itemId) {
+  const item = state.goods.find((goods) => goods.id === itemId);
+  if (!item) return;
+
+  const editor = document.createElement("div");
+  editor.className = "edit-viewer";
+  editor.innerHTML = `
+    <form class="edit-card" id="goods-edit-form" data-goods-id="${item.id}">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">${escapeHtml(item.sku)}</p>
+          <h3>Редактировать товар</h3>
+        </div>
+        <button class="delete-button" type="button" data-close-edit title="Закрыть">×</button>
+      </div>
+      <div class="edit-grid">
+        <label>
+          Дата покупки
+          <input name="purchaseDate" type="date" value="${inputValue(item.purchaseDate || TODAY)}" required />
+        </label>
+        <label>
+          Название
+          <input name="name" value="${inputValue(item.name)}" required />
+        </label>
+        <label>
+          Цвет
+          <input name="color" value="${inputValue(item.color)}" />
+        </label>
+        <label>
+          Перевозчик
+          <input name="carrier" value="${inputValue(item.carrier)}" />
+        </label>
+        <label class="wide-field">
+          Характеристика
+          <input name="spec" value="${inputValue(item.spec)}" />
+        </label>
+        <label>
+          Цена EUR
+          <input name="priceEur" type="number" step="0.01" min="0" value="${inputValue(item.priceEur)}" data-edit-calc />
+        </label>
+        <label>
+          Курс цены
+          <input name="priceRate" type="number" step="0.01" min="0" value="${inputValue(item.priceRate)}" data-edit-calc />
+        </label>
+        <label>
+          Цена RUB
+          <input name="priceRub" type="text" readonly value="${money(goodsPriceRub(item))}" />
+        </label>
+        <label>
+          Доп. затраты EUR
+          <input name="extraEur" type="number" step="0.01" min="0" value="${inputValue(item.extraEur)}" data-edit-calc />
+        </label>
+        <label>
+          Курс затрат
+          <input name="extraRate" type="number" step="0.01" min="0" value="${inputValue(item.extraRate)}" data-edit-calc />
+        </label>
+        <label>
+          Затраты RUB
+          <input name="extraRub" type="text" readonly value="${money(goodsExtraRub(item))}" />
+        </label>
+        <label>
+          Статус
+          <select name="status">
+            <option value="bought" ${item.status === "bought" ? "selected" : ""}>Выкуплен</option>
+            <option value="in_transit" ${item.status === "in_transit" ? "selected" : ""}>В доставке</option>
+            <option value="arrived" ${item.status === "arrived" ? "selected" : ""}>Прибыл</option>
+          </select>
+        </label>
+        <label>
+          Дата прибытия
+          <input name="arrivedAt" type="date" value="${inputValue(item.arrivedAt)}" />
+        </label>
+        <label>
+          Доставка EUR
+          <input name="deliveryEur" type="number" step="0.01" min="0" value="${inputValue(item.deliveryEur)}" data-edit-calc />
+        </label>
+        <label>
+          Курс доставки
+          <input name="deliveryRate" type="number" step="0.01" min="0" value="${inputValue(item.deliveryRate)}" data-edit-calc />
+        </label>
+        <label>
+          Доставка RUB
+          <input name="deliveryRub" type="number" step="0.01" min="0" value="${inputValue(item.deliveryRub)}" />
+        </label>
+        <label class="wide-field">
+          Добавить фото
+          <input name="photos" type="file" accept="image/*" multiple />
+          <small>Можно выбрать несколько фото сразу.</small>
+        </label>
+      </div>
+      <div class="goods-actions">
+        <strong id="edit-total">${money(goodsRub(item))} · ${money(goodsEur(item), "EUR")}</strong>
+        <div class="actions">
+          <button class="small-button" type="button" data-close-edit>Отмена</button>
+          <button class="primary-button" type="submit">Сохранить</button>
+        </div>
+      </div>
+    </form>
+  `;
+  editor.addEventListener("click", (event) => {
+    if (event.target === editor || event.target.closest("[data-close-edit]")) {
+      editor.remove();
+    }
+  });
+  document.body.append(editor);
+}
+
+function calculateEditForm(form) {
+  const priceRub = num(form.elements.priceEur.value) * num(form.elements.priceRate.value);
+  const extraRub = num(form.elements.extraEur.value) * num(form.elements.extraRate.value);
+  const deliveryEurRub = num(form.elements.deliveryEur.value) * num(form.elements.deliveryRate.value);
+  const deliveryRub = num(form.elements.deliveryRub.value) || deliveryEurRub;
+  form.elements.priceRub.value = money(priceRub);
+  form.elements.extraRub.value = money(extraRub);
+  form.querySelector("#edit-total").textContent = `${money(priceRub + extraRub + deliveryRub)} · ${money(
+    num(form.elements.priceEur.value) + num(form.elements.extraEur.value) + num(form.elements.deliveryEur.value),
+    "EUR",
+  )}`;
+}
+
+async function saveGoodsEdit(form) {
+  const item = state.goods.find((goods) => goods.id === form.dataset.goodsId);
+  if (!item) return;
+
+  const status = form.elements.status.value;
+  const addedPhotos = await filesToPhotos(form.elements.photos.files);
+  item.purchaseDate = form.elements.purchaseDate.value || TODAY;
+  item.name = form.elements.name.value.trim();
+  item.color = form.elements.color.value.trim();
+  item.carrier = form.elements.carrier.value.trim();
+  item.spec = form.elements.spec.value.trim();
+  item.priceEur = num(form.elements.priceEur.value);
+  item.priceRate = num(form.elements.priceRate.value) || 100;
+  item.extraEur = num(form.elements.extraEur.value);
+  item.extraRate = num(form.elements.extraRate.value) || 100;
+  item.status = status;
+  item.arrivedAt = form.elements.arrivedAt.value || (status === "arrived" ? TODAY : "");
+  item.deliveryEur = num(form.elements.deliveryEur.value);
+  item.deliveryRate = num(form.elements.deliveryRate.value) || getAverageAccountRate();
+  item.deliveryRub = num(form.elements.deliveryRub.value);
+  item.photos = [...(item.photos || []), ...addedPhotos];
+  form.closest(".edit-viewer")?.remove();
+  commit();
 }
 
 function commit() {
@@ -1135,6 +1285,11 @@ document.addEventListener("click", (event) => {
     els.arrivalForm.classList.remove("hidden");
   }
 
+  const editGoods = event.target.closest("[data-edit-goods]");
+  if (editGoods) {
+    openGoodsEditor(editGoods.dataset.editGoods);
+  }
+
   const deleteGoods = event.target.closest("[data-delete-goods]");
   if (deleteGoods && confirm("Удалить товар?")) {
     state.goods = state.goods.filter((item) => item.id !== deleteGoods.dataset.deleteGoods);
@@ -1154,6 +1309,7 @@ document.addEventListener("click", (event) => {
 
   const openPhoto = event.target.closest("[data-open-photo]");
   if (openPhoto) {
+    event.preventDefault();
     const [goodsId, photoId] = openPhoto.dataset.openPhoto.split(":");
     const item = state.goods.find((goods) => goods.id === goodsId);
     const photo = item?.photos?.find((entry) => entry.id === photoId);
@@ -1162,6 +1318,7 @@ document.addEventListener("click", (event) => {
 
   const openArrivalPhoto = event.target.closest("[data-open-arrival-photo]");
   if (openArrivalPhoto) {
+    event.preventDefault();
     const [arrivalId, photoId] = openArrivalPhoto.dataset.openArrivalPhoto.split(":");
     const arrival = state.arrivals.find((entry) => entry.id === arrivalId);
     const photo = arrival?.photos?.find((entry) => entry.id === photoId);
@@ -1173,6 +1330,18 @@ document.addEventListener("click", (event) => {
     state.operations = state.operations.filter((item) => item.id !== deleteOperation.dataset.deleteOperation);
     commit();
   }
+});
+
+document.addEventListener("input", (event) => {
+  if (event.target.closest("[data-edit-calc]")) {
+    calculateEditForm(event.target.closest("#goods-edit-form"));
+  }
+});
+
+document.addEventListener("submit", async (event) => {
+  if (!event.target.matches("#goods-edit-form")) return;
+  event.preventDefault();
+  await saveGoodsEdit(event.target);
 });
 
 document.querySelector("#export-button").addEventListener("click", exportData);
