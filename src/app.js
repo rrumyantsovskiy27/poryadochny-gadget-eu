@@ -579,6 +579,10 @@ function renderGoodsCard(item) {
             ? `<button class="arrive-button" type="button" data-arrive-jump="${item.id}">Принять</button>`
             : ""
         }
+        <label class="small-button file-button">
+          Добавить фото
+          <input type="file" accept="image/*,.jpg,.jpeg,.png,.webp" multiple data-add-photo="${item.id}" />
+        </label>
         <button class="small-button" type="button" data-edit-goods="${item.id}">Редактировать</button>
         <button class="delete-button" type="button" data-delete-goods="${item.id}" title="Удалить">×</button>
       </div>
@@ -597,6 +601,7 @@ function renderPhotoGallery(item) {
             <figure class="photo-thumb">
               <a class="photo-open" href="${escapeHtml(photo.src)}" target="_blank" rel="noopener" data-open-photo="${item.id}:${photo.id}" title="Открыть фото">
                 <img src="${escapeHtml(photo.src)}" alt="${escapeHtml(item.sku)}" />
+                <span class="photo-broken">Фото нужно добавить заново</span>
               </a>
               <button class="photo-remove" type="button" data-remove-photo="${item.id}:${photo.id}" title="Удалить фото">×</button>
             </figure>
@@ -658,6 +663,7 @@ function renderArrivalPhotos(arrival) {
             <figure class="photo-thumb">
               <a class="photo-open" href="${escapeHtml(photo.src)}" target="_blank" rel="noopener" data-open-arrival-photo="${arrival.id}:${photo.id}" title="Открыть фото">
                 <img src="${escapeHtml(photo.src)}" alt="Фото прибытия" />
+                <span class="photo-broken">Фото нужно добавить заново</span>
               </a>
             </figure>
           `,
@@ -896,7 +902,8 @@ function addArrivalsBatch(form) {
 
 async function filesToPhotos(files) {
   const picked = [...files].filter(isImageFile).slice(0, 8);
-  return Promise.all(picked.map(fileToPhoto));
+  const results = await Promise.allSettled(picked.map(fileToPhoto));
+  return results.filter((result) => result.status === "fulfilled").map((result) => result.value);
 }
 
 function isImageFile(file) {
@@ -941,13 +948,29 @@ function openPhotoViewer(src, title = "Фото") {
   viewer.innerHTML = `
     <button class="photo-viewer-close" type="button" title="Закрыть">×</button>
     <img src="${escapeHtml(src)}" alt="${escapeHtml(title)}" />
+    <div class="photo-viewer-error">Это старое фото не открывается. Удалите его и добавьте JPEG заново.</div>
   `;
+  const image = viewer.querySelector("img");
+  image.addEventListener("error", () => viewer.classList.add("is-broken"));
+  image.addEventListener("load", () => viewer.classList.remove("is-broken"));
   viewer.addEventListener("click", (event) => {
     if (event.target === viewer || event.target.closest(".photo-viewer-close")) {
       viewer.remove();
     }
   });
   document.body.append(viewer);
+}
+
+async function addPhotosToGoods(goodsId, files) {
+  const item = state.goods.find((goods) => goods.id === goodsId);
+  if (!item) return;
+  const photos = await filesToPhotos(files);
+  if (!photos.length) {
+    alert("Фото не добавилось. Выберите обычный JPEG/JPG или PNG.");
+    return;
+  }
+  item.photos = [...(item.photos || []), ...photos];
+  commit();
 }
 
 function openGoodsEditor(itemId) {
@@ -1339,6 +1362,24 @@ document.addEventListener("submit", async (event) => {
   event.preventDefault();
   await saveGoodsEdit(event.target);
 });
+
+document.addEventListener("change", async (event) => {
+  const addPhotoInput = event.target.closest("[data-add-photo]");
+  if (!addPhotoInput) return;
+  await addPhotosToGoods(addPhotoInput.dataset.addPhoto, addPhotoInput.files);
+  addPhotoInput.value = "";
+});
+
+document.addEventListener(
+  "error",
+  (event) => {
+    const image = event.target;
+    if (image instanceof HTMLImageElement && image.closest(".photo-thumb")) {
+      image.closest(".photo-thumb").classList.add("is-broken");
+    }
+  },
+  true,
+);
 
 document.querySelector("#export-button").addEventListener("click", exportData);
 document.querySelector("#settings-export").addEventListener("click", exportData);
