@@ -13,6 +13,7 @@ const statusLabels = {
 };
 
 const defaultState = {
+  schemaVersion: 2,
   accounts: accountBlueprints.map((account) => ({
     ...account,
     currency: "EUR",
@@ -97,8 +98,11 @@ function normalizeState(data) {
 
   const goods = Array.isArray(data.goods) ? data.goods.map(normalizeGoodsItem) : [];
   assignMissingSkus(goods);
+  const rawLots = Array.isArray(data.lots) ? data.lots.map(normalizeLot) : [];
+  const migrated = migrateLotsToCurrentRules(goods, rawLots, num(data.schemaVersion));
 
   return {
+    schemaVersion: 2,
     accounts,
     operations: Array.isArray(data.operations)
       ? data.operations.map((operation) => ({
@@ -111,8 +115,8 @@ function normalizeState(data) {
           note: String(operation.note || ""),
         }))
       : [],
-    goods,
-    lots: Array.isArray(data.lots) ? data.lots.map(normalizeLot) : [],
+    goods: migrated.goods,
+    lots: migrated.lots,
     arrivals: Array.isArray(data.arrivals)
       ? data.arrivals.map((arrival) => ({
           id: arrival.id || crypto.randomUUID(),
@@ -169,6 +173,72 @@ function normalizeLot(lot) {
     createdAt: lot.createdAt || TODAY,
     photos: normalizePhotos(lot.photos),
   };
+}
+
+function migrateLotsToCurrentRules(goods, lots, schemaVersion) {
+  if (schemaVersion >= 2) {
+    return { goods, lots };
+  }
+
+  const lotById = new Map(lots.map((lot) => [lot.id, lot]));
+  const groups = new Map();
+
+  goods.forEach((item) => {
+    const oldLot = lotById.get(item.lotId);
+    const groupKey = oldLot?.createdAt || item.purchaseDate || TODAY;
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, {
+        id: crypto.randomUUID(),
+        createdAt: groupKey,
+        names: [],
+        photos: [],
+        items: [],
+      });
+    }
+
+    const group = groups.get(groupKey);
+    group.items.push(item);
+    if (item.name) group.names.push(item.name);
+    group.photos.push(...normalizePhotos(oldLot?.photos));
+    group.photos.push(...normalizePhotos(item.photos));
+  });
+
+  const nextLots = [...groups.values()].map((group) => ({
+    id: group.id,
+    name: makeLotName(group.names),
+    createdAt: group.createdAt,
+    photos: uniquePhotos(group.photos),
+  }));
+
+  const nextGoods = goods.map((item) => {
+    const oldLot = lotById.get(item.lotId);
+    const groupKey = oldLot?.createdAt || item.purchaseDate || TODAY;
+    const group = groups.get(groupKey);
+    return {
+      ...item,
+      lotId: group?.id || item.lotId,
+      photos: [],
+    };
+  });
+
+  return { goods: nextGoods, lots: nextLots };
+}
+
+function makeLotName(names) {
+  const uniqueNames = [...new Set(names.filter(Boolean))];
+  if (!uniqueNames.length) return "Лот";
+  if (uniqueNames.length === 1) return uniqueNames[0];
+  return `Лот: ${uniqueNames.slice(0, 3).join(", ")}${uniqueNames.length > 3 ? ` +${uniqueNames.length - 3}` : ""}`;
+}
+
+function uniquePhotos(photos) {
+  const seen = new Set();
+  return normalizePhotos(photos).filter((photo) => {
+    const key = photo.path || photo.src;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function normalizePhotos(photos) {
@@ -336,9 +406,13 @@ async function initCloudSync() {
     setSaveStatus("облако активно");
     const remoteState = await window.cloudStore.load();
     if (remoteState) {
+      const needsMigration = num(remoteState.schemaVersion) < 2;
       state = normalizeState(remoteState);
       persistLocalState();
       render();
+      if (needsMigration) {
+        await window.cloudStore.save(state);
+      }
     } else {
       await window.cloudStore.save(state);
     }
