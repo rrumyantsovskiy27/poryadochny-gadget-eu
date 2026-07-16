@@ -143,6 +143,13 @@
         }
       }
     }
+    if (Array.isArray(next.lots)) {
+      for (const lot of next.lots) {
+        if (Array.isArray(lot.photos)) {
+          lot.photos = await Promise.all(lot.photos.map(resolvePhoto));
+        }
+      }
+    }
     if (Array.isArray(next.arrivals)) {
       for (const arrival of next.arrivals) {
         if (Array.isArray(arrival.photos)) {

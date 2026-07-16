@@ -21,6 +21,7 @@ const defaultState = {
   })),
   operations: [],
   goods: [],
+  lots: [],
   arrivals: [],
 };
 
@@ -32,6 +33,7 @@ let applyingRemoteState = false;
 let cloudReady = false;
 let cloudSaveTimer = null;
 let cloudListenerReady = false;
+let lastLocalMutationAt = 0;
 
 const els = {
   authScreen: document.querySelector("#auth-screen"),
@@ -109,6 +111,7 @@ function normalizeState(data) {
         }))
       : [],
     goods,
+    lots: Array.isArray(data.lots) ? data.lots.map(normalizeLot) : [],
     arrivals: Array.isArray(data.arrivals)
       ? data.arrivals.map((arrival) => ({
           id: arrival.id || crypto.randomUUID(),
@@ -153,7 +156,17 @@ function normalizeGoodsItem(item) {
     deliveryRate: num(item.deliveryRate) || extraRate,
     deliveryRub: num(item.deliveryRub),
     sku: String(item.sku || ""),
+    lotId: String(item.lotId || ""),
     photos: normalizePhotos(item.photos),
+  };
+}
+
+function normalizeLot(lot) {
+  return {
+    id: lot.id || crypto.randomUUID(),
+    name: String(lot.name || "Лот").trim(),
+    createdAt: lot.createdAt || TODAY,
+    photos: normalizePhotos(lot.photos),
   };
 }
 
@@ -175,6 +188,20 @@ function clonePhotos(photos) {
     ...photo,
     id: crypto.randomUUID(),
   }));
+}
+
+function getLot(lotId) {
+  return state.lots?.find((lot) => lot.id === lotId);
+}
+
+function getGoodsPhotos(item) {
+  const ownPhotos = normalizePhotos(item.photos).map((photo) => ({ ...photo, source: "goods" }));
+  const lotPhotos = normalizePhotos(getLot(item.lotId)?.photos).map((photo) => ({ ...photo, source: "lot" }));
+  return [...ownPhotos, ...lotPhotos];
+}
+
+function findGoodsPhoto(item, photoId) {
+  return getGoodsPhotos(item).find((photo) => photo.id === photoId);
 }
 
 function assignMissingSkus(goods) {
@@ -241,6 +268,21 @@ function queueCloudSave() {
   }, 450);
 }
 
+async function saveCloudNow() {
+  if (!cloudReady || applyingRemoteState) return true;
+  window.clearTimeout(cloudSaveTimer);
+  try {
+    setSaveStatus("синхронизация");
+    await window.cloudStore.save(state);
+    setSaveStatus("облако активно");
+    return true;
+  } catch (error) {
+    console.error(error);
+    setSaveStatus("ошибка облака");
+    return false;
+  }
+}
+
 async function initCloudSync() {
   if (!window.cloudStore?.isConfigured()) {
     setSaveStatus("локально");
@@ -283,8 +325,16 @@ async function initCloudSync() {
       cloudListenerReady = true;
       window.cloudStore.onRemoteState(
         (remoteState) => {
+          const normalizedRemoteState = normalizeState(remoteState);
+          const hasFreshLocalGoods =
+            Date.now() - lastLocalMutationAt < 10000 &&
+            normalizedRemoteState.goods.length < state.goods.length;
+          if (hasFreshLocalGoods) {
+            saveCloudNow();
+            return;
+          }
           applyingRemoteState = true;
-          state = normalizeState(remoteState);
+          state = normalizedRemoteState;
           persistLocalState();
           render();
           applyingRemoteState = false;
@@ -604,10 +654,11 @@ function renderGoodsCard(item) {
 }
 
 function renderPhotoGallery(item) {
-  if (!item.photos?.length) return "";
+  const photos = getGoodsPhotos(item);
+  if (!photos.length) return "";
   return `
     <div class="photo-grid">
-      ${item.photos
+      ${photos
         .map(
           (photo) => `
             <figure class="photo-thumb">
@@ -763,6 +814,7 @@ async function addGoodsBatch(form) {
   const rows = [...form.querySelectorAll(".batch-row")];
   let skuNumber = nextSkuNumber();
   const goods = [];
+  const lots = [];
 
   for (const row of rows) {
     const name = row.querySelector('[name="name"]').value.trim();
@@ -772,6 +824,15 @@ async function addGoodsBatch(form) {
     const quantityValue = Number.parseInt(quantityInput?.value || "1", 10);
     const quantity = Math.min(Math.max(Number.isFinite(quantityValue) ? quantityValue : 1, 1), 500);
     const lotPhotos = await filesToPhotos(row.querySelector('[name="photos"]').files);
+    const lotId = lotPhotos.length ? crypto.randomUUID() : "";
+    if (lotId) {
+      lots.push({
+        id: lotId,
+        name,
+        createdAt: TODAY,
+        photos: lotPhotos,
+      });
+    }
     const status = row.querySelector('[name="status"]').value;
     const baseItem = {
       purchaseDate: row.querySelector('[name="purchaseDate"]').value || TODAY,
@@ -788,6 +849,7 @@ async function addGoodsBatch(form) {
       deliveryEur: 0,
       deliveryRate: getAverageAccountRate(),
       deliveryRub: 0,
+      lotId,
     };
 
     for (let index = 0; index < quantity; index += 1) {
@@ -795,7 +857,7 @@ async function addGoodsBatch(form) {
         id: crypto.randomUUID(),
         sku: makeSku(skuNumber++),
         ...baseItem,
-        photos: clonePhotos(lotPhotos),
+        photos: [],
       });
     }
   }
@@ -805,11 +867,22 @@ async function addGoodsBatch(form) {
     return;
   }
 
+  state.lots = [...(state.lots || []), ...lots];
   state.goods.push(...goods);
+  goodsFilter = "all";
+  goodsSearch = "";
+  document.querySelector("#goods-status-filter").value = "all";
+  document.querySelector("#goods-search").value = "";
   form.reset();
   els.batchList.replaceChildren();
   els.batchForm.classList.add("hidden");
   commit();
+  const cloudSaved = await saveCloudNow();
+  if (!cloudSaved) {
+    alert("Товар появился на экране, но облако не приняло сохранение. Попробуйте сохранить без фото или уменьшить количество фото.");
+    return;
+  }
+  alert(`Добавлено ${goods.length} ${plural(goods.length, ["товар", "товара", "товаров"])}.`);
 }
 
 function addArrivalRow(selectedGoodsId = "") {
@@ -1132,6 +1205,9 @@ async function saveGoodsEdit(form) {
 }
 
 function commit() {
+  if (!applyingRemoteState) {
+    lastLocalMutationAt = Date.now();
+  }
   render();
   saveState();
 }
@@ -1352,6 +1428,10 @@ document.addEventListener("click", (event) => {
     const item = state.goods.find((goods) => goods.id === goodsId);
     if (item) {
       item.photos = (item.photos || []).filter((photo) => photo.id !== photoId);
+      const lot = getLot(item.lotId);
+      if (lot) {
+        lot.photos = (lot.photos || []).filter((photo) => photo.id !== photoId);
+      }
       commit();
     }
   }
@@ -1361,7 +1441,7 @@ document.addEventListener("click", (event) => {
     event.preventDefault();
     const [goodsId, photoId] = openPhoto.dataset.openPhoto.split(":");
     const item = state.goods.find((goods) => goods.id === goodsId);
-    const photo = item?.photos?.find((entry) => entry.id === photoId);
+    const photo = item ? findGoodsPhoto(item, photoId) : null;
     openPhotoViewer(photo?.src, item?.sku || "Фото товара");
   }
 
