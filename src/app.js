@@ -169,6 +169,13 @@ function normalizePhotos(photos) {
     }));
 }
 
+function clonePhotos(photos) {
+  return normalizePhotos(photos).map((photo) => ({
+    ...photo,
+    id: crypto.randomUUID(),
+  }));
+}
+
 function assignMissingSkus(goods) {
   const used = new Set(goods.map((item) => item.sku).filter(Boolean));
   let next = nextSkuNumber(goods);
@@ -727,13 +734,19 @@ function refreshBatchRows() {
 async function addGoodsBatch(form) {
   const rows = [...form.querySelectorAll(".batch-row")];
   let skuNumber = nextSkuNumber();
-  const goods = (
-    await Promise.all(
-      rows.map(async (row) => ({
-      id: crypto.randomUUID(),
-      sku: makeSku(skuNumber++),
+  const goods = [];
+
+  for (const row of rows) {
+    const name = row.querySelector('[name="name"]').value.trim();
+    if (!name) continue;
+
+    const quantityValue = Number.parseInt(row.querySelector('[name="quantity"]').value, 10);
+    const quantity = Math.min(Math.max(Number.isFinite(quantityValue) ? quantityValue : 1, 1), 500);
+    const lotPhotos = await filesToPhotos(row.querySelector('[name="photos"]').files);
+    const status = row.querySelector('[name="status"]').value;
+    const baseItem = {
       purchaseDate: row.querySelector('[name="purchaseDate"]').value || TODAY,
-      name: row.querySelector('[name="name"]').value.trim(),
+      name,
       color: row.querySelector('[name="color"]').value.trim(),
       carrier: row.querySelector('[name="carrier"]').value.trim(),
       spec: row.querySelector('[name="spec"]').value.trim(),
@@ -741,15 +754,22 @@ async function addGoodsBatch(form) {
       priceRate: num(row.querySelector('[name="priceRate"]').value) || 100,
       extraEur: num(row.querySelector('[name="extraEur"]').value),
       extraRate: num(row.querySelector('[name="extraRate"]').value) || 100,
-      status: row.querySelector('[name="status"]').value,
-      arrivedAt: row.querySelector('[name="status"]').value === "arrived" ? TODAY : "",
+      status,
+      arrivedAt: status === "arrived" ? TODAY : "",
       deliveryEur: 0,
       deliveryRate: getAverageAccountRate(),
       deliveryRub: 0,
-      photos: await filesToPhotos(row.querySelector('[name="photos"]').files),
-      })),
-    )
-  ).filter((item) => item.name);
+    };
+
+    for (let index = 0; index < quantity; index += 1) {
+      goods.push({
+        id: crypto.randomUUID(),
+        sku: makeSku(skuNumber++),
+        ...baseItem,
+        photos: clonePhotos(lotPhotos),
+      });
+    }
+  }
 
   if (!goods.length) {
     alert("Заполните хотя бы одно название товара.");
