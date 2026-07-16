@@ -203,9 +203,21 @@ function makeSku(number) {
   return `PG-${String(number).padStart(4, "0")}`;
 }
 
+function persistLocalState() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function saveState() {
-  localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  const locallySaved = persistLocalState();
   setSaveStatus(cloudReady ? "сохранено в облаке" : "сохранено локально");
+  if (!locallySaved && !cloudReady) {
+    setSaveStatus("не хватает памяти");
+  }
   if (cloudReady && !applyingRemoteState) queueCloudSave();
   window.setTimeout(() => {
     setSaveStatus(cloudReady ? "облако активно" : "локально");
@@ -261,7 +273,7 @@ async function initCloudSync() {
     const remoteState = await window.cloudStore.load();
     if (remoteState) {
       state = normalizeState(remoteState);
-      localStorage.setItem(STORE_KEY, JSON.stringify(state));
+      persistLocalState();
       render();
     } else {
       await window.cloudStore.save(state);
@@ -273,7 +285,7 @@ async function initCloudSync() {
         (remoteState) => {
           applyingRemoteState = true;
           state = normalizeState(remoteState);
-          localStorage.setItem(STORE_KEY, JSON.stringify(state));
+          persistLocalState();
           render();
           applyingRemoteState = false;
           setSaveStatus("обновлено из облака");
@@ -756,7 +768,8 @@ async function addGoodsBatch(form) {
     const name = row.querySelector('[name="name"]').value.trim();
     if (!name) continue;
 
-    const quantityValue = Number.parseInt(row.querySelector('[name="quantity"]').value, 10);
+    const quantityInput = row.querySelector('[name="quantity"]');
+    const quantityValue = Number.parseInt(quantityInput?.value || "1", 10);
     const quantity = Math.min(Math.max(Number.isFinite(quantityValue) ? quantityValue : 1, 1), 500);
     const lotPhotos = await filesToPhotos(row.querySelector('[name="photos"]').files);
     const status = row.querySelector('[name="status"]').value;
@@ -917,14 +930,14 @@ function fileToPhoto(file) {
     reader.addEventListener("load", () => {
       const image = new Image();
       image.addEventListener("load", () => {
-        const maxSize = 900;
+        const maxSize = 520;
         const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
         const canvas = document.createElement("canvas");
         canvas.width = Math.max(1, Math.round(image.width * scale));
         canvas.height = Math.max(1, Math.round(image.height * scale));
         const context = canvas.getContext("2d");
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.72);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.55);
         resolve({
           id: crypto.randomUUID(),
           src: dataUrl,
@@ -1119,8 +1132,8 @@ async function saveGoodsEdit(form) {
 }
 
 function commit() {
-  saveState();
   render();
+  saveState();
 }
 
 function exportData() {
@@ -1245,7 +1258,24 @@ els.batchList.addEventListener("click", (event) => {
 
 document.querySelector("#goods-batch-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  await addGoodsBatch(event.currentTarget);
+  const form = event.currentTarget;
+  const submitButton = form.querySelector('button[type="submit"]');
+  const previousText = submitButton?.textContent || "";
+  try {
+    if (submitButton) {
+      submitButton.disabled = true;
+      submitButton.textContent = "Сохраняю...";
+    }
+    await addGoodsBatch(form);
+  } catch (error) {
+    console.error(error);
+    alert("Партия не сохранилась. Попробуйте добавить без фото или пришлите мне скрин ошибки.");
+  } finally {
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = previousText;
+    }
+  }
 });
 
 document.querySelector("#start-arrival-button").addEventListener("click", () => {
