@@ -164,6 +164,7 @@ function normalizePhotos(photos) {
     .map((photo) => ({
       id: photo.id || crypto.randomUUID(),
       src: String(photo.src),
+      path: String(photo.path || ""),
       name: String(photo.name || "Фото"),
       addedAt: photo.addedAt || TODAY,
     }));
@@ -913,18 +914,22 @@ function fileToPhoto(file) {
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
         const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
         Promise.resolve(window.cloudStore?.uploadPhoto(dataUrl, file.name) || dataUrl)
-          .then((src) =>
+          .then((uploaded) => {
+            const src = typeof uploaded === "string" ? uploaded : uploaded?.src || dataUrl;
+            const path = typeof uploaded === "object" && uploaded?.path ? uploaded.path : "";
             resolve({
               id: crypto.randomUUID(),
               src,
+              path,
               name: file.name,
               addedAt: TODAY,
-            }),
-          )
+            });
+          })
           .catch(() =>
             resolve({
               id: crypto.randomUUID(),
               src: dataUrl,
+              path: "",
               name: file.name,
               addedAt: TODAY,
             }),

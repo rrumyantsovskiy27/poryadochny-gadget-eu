@@ -38,7 +38,7 @@
       .maybeSingle();
 
     if (error) throw error;
-    return data?.state || null;
+    return data?.state ? hydrateStatePhotos(data.state) : null;
   }
 
   async function save(state) {
@@ -65,7 +65,11 @@
           filter: `id=eq.${config.documentId}`,
         },
         (payload) => {
-          if (payload.new?.state) callback(payload.new.state);
+          if (payload.new?.state) {
+            hydrateStatePhotos(payload.new.state)
+              .then(callback)
+              .catch(() => callback(payload.new.state));
+          }
         },
       )
       .subscribe((status) => {
@@ -88,8 +92,65 @@
     });
     if (error) throw error;
 
-    const { data } = client.storage.from(config.storageBucket).getPublicUrl(path);
-    return data.publicUrl || dataUrl;
+    const { data, error: signedError } = await client.storage
+      .from(config.storageBucket)
+      .createSignedUrl(path, 60 * 60 * 24 * 7);
+    if (signedError) throw signedError;
+
+    return {
+      src: data?.signedUrl || dataUrl,
+      path,
+    };
+  }
+
+  function inferPhotoPath(src) {
+    if (!src || !config.storageBucket) return "";
+    const markers = [
+      `/storage/v1/object/public/${config.storageBucket}/`,
+      `/storage/v1/object/sign/${config.storageBucket}/`,
+    ];
+    const marker = markers.find((item) => src.includes(item));
+    if (!marker) return "";
+    const tail = src.split(marker)[1]?.split("?")[0] || "";
+    try {
+      return decodeURIComponent(tail);
+    } catch {
+      return tail;
+    }
+  }
+
+  async function resolvePhoto(photo) {
+    if (!photo || !ready) return photo;
+    const path = photo.path || inferPhotoPath(photo.src);
+    if (!path) return photo;
+
+    const { data, error } = await client.storage.from(config.storageBucket).createSignedUrl(path, 60 * 60 * 24 * 7);
+    if (error || !data?.signedUrl) return { ...photo, path };
+    return {
+      ...photo,
+      path,
+      src: data.signedUrl,
+    };
+  }
+
+  async function hydrateStatePhotos(state) {
+    if (!state) return state;
+    const next = structuredClone(state);
+    if (Array.isArray(next.goods)) {
+      for (const item of next.goods) {
+        if (Array.isArray(item.photos)) {
+          item.photos = await Promise.all(item.photos.map(resolvePhoto));
+        }
+      }
+    }
+    if (Array.isArray(next.arrivals)) {
+      for (const arrival of next.arrivals) {
+        if (Array.isArray(arrival.photos)) {
+          arrival.photos = await Promise.all(arrival.photos.map(resolvePhoto));
+        }
+      }
+    }
+    return next;
   }
 
   async function getUser() {
