@@ -29,6 +29,7 @@ let state = loadState();
 let operationFilter = "all";
 let goodsFilter = "all";
 let goodsSearch = "";
+let expandedLotIds = new Set();
 let applyingRemoteState = false;
 let cloudReady = false;
 let cloudSaveTimer = null;
@@ -202,6 +203,11 @@ function getGoodsPhotos(item) {
 
 function findGoodsPhoto(item, photoId) {
   return getGoodsPhotos(item).find((photo) => photo.id === photoId);
+}
+
+function getLotLabel(lotId) {
+  const lot = getLot(lotId);
+  return lot?.name || "Без лота";
 }
 
 function assignMissingSkus(goods) {
@@ -549,7 +555,10 @@ function renderGoods() {
     .filter((item) => goodsFilter === "all" || item.status === goodsFilter)
     .filter((item) => {
       if (!query) return true;
-      return [item.sku, item.name, item.color, item.spec, item.carrier].join(" ").toLowerCase().includes(query);
+      return [item.sku, item.name, item.color, item.spec, item.carrier, getLotLabel(item.lotId)]
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
     })
     .sort((a, b) => {
       if (a.status === "arrived" && b.status !== "arrived") return 1;
@@ -562,11 +571,99 @@ function renderGoods() {
 
   document.querySelector("#goods-total-rub").textContent = money(totalRub);
   document.querySelector("#goods-total-eur").textContent = money(totalEur, "EUR");
-  els.goodsCount.textContent = `${filtered.length} ${plural(filtered.length, ["позиция", "позиции", "позиций"])}`;
+  const groups = groupGoodsByLot(filtered);
+  els.goodsCount.textContent = `${filtered.length} ${plural(filtered.length, ["позиция", "позиции", "позиций"])} · ${
+    groups.length
+  } ${plural(groups.length, ["лот", "лота", "лотов"])}`;
   els.goodsList.replaceChildren(
-    ...(filtered.length ? filtered.map(renderGoodsCard) : [emptyNode("Начните ввод партии, чтобы быстро занести несколько товаров.")]),
+    ...(groups.length ? groups.map(renderLotGroup) : [emptyNode("Начните ввод партии, чтобы быстро занести несколько товаров.")]),
   );
   renderStatusSummary();
+}
+
+function groupGoodsByLot(items) {
+  const groups = new Map();
+  items.forEach((item) => {
+    const key = item.lotId || `single-${item.id}`;
+    if (!groups.has(key)) {
+      const lot = getLot(item.lotId);
+      groups.set(key, {
+        id: key,
+        lotId: item.lotId || "",
+        title: lot?.name || item.name || "Без названия",
+        createdAt: lot?.createdAt || item.purchaseDate || TODAY,
+        photos: lot?.photos?.length ? lot.photos : item.photos || [],
+        items: [],
+      });
+    }
+    groups.get(key).items.push(item);
+  });
+
+  const sorted = [...groups.values()].sort((a, b) => {
+    const dateA = a.items.reduce((latest, item) => (item.purchaseDate > latest ? item.purchaseDate : latest), a.createdAt);
+    const dateB = b.items.reduce((latest, item) => (item.purchaseDate > latest ? item.purchaseDate : latest), b.createdAt);
+    return dateB.localeCompare(dateA);
+  });
+
+  if (sorted.length && !sorted.some((group) => expandedLotIds.has(group.id))) {
+    expandedLotIds.add(sorted[0].id);
+  }
+
+  return sorted;
+}
+
+function renderLotGroup(group) {
+  const card = document.createElement("article");
+  const isExpanded = expandedLotIds.has(group.id);
+  const totalRub = group.items.reduce((sum, item) => sum + goodsRub(item), 0);
+  const totalEur = group.items.reduce((sum, item) => sum + goodsEur(item), 0);
+  const latestDate = group.items.reduce((latest, item) => (item.purchaseDate > latest ? item.purchaseDate : latest), group.createdAt);
+  const statuses = Object.keys(statusLabels)
+    .map((status) => {
+      const count = group.items.filter((item) => item.status === status).length;
+      return count ? `<span class="status ${status}">${statusLabels[status]} · ${count}</span>` : "";
+    })
+    .join("");
+  card.className = `lot-card${isExpanded ? " open" : ""}`;
+  card.innerHTML = `
+    <button class="lot-head" type="button" data-toggle-lot="${escapeHtml(group.id)}" aria-expanded="${isExpanded}">
+      <div class="lot-main">
+        <span class="lot-kicker">Лот · ${formatDate(latestDate)}</span>
+        <strong>${escapeHtml(group.title)}</strong>
+        <span>${group.items.length} ${plural(group.items.length, ["товар", "товара", "товаров"])} · ${money(totalRub)} · ${money(
+          totalEur,
+          "EUR",
+        )}</span>
+      </div>
+      <div class="lot-side">
+        <div class="lot-statuses">${statuses}</div>
+        <span class="lot-toggle">${isExpanded ? "Свернуть" : "Открыть"}</span>
+      </div>
+    </button>
+    ${renderLotPreviewPhotos(group.photos)}
+    ${
+      isExpanded
+        ? `<div class="lot-items">${group.items.map((item) => renderGoodsCard(item).outerHTML).join("")}</div>`
+        : ""
+    }
+  `;
+  return card;
+}
+
+function renderLotPreviewPhotos(photos = []) {
+  const normalized = normalizePhotos(photos).slice(0, 4);
+  if (!normalized.length) return "";
+  return `
+    <div class="lot-photos">
+      ${normalized
+        .map(
+          (photo) => `
+            <img src="${escapeHtml(photo.src)}" alt="Фото лота" />
+          `,
+        )
+        .join("")}
+    </div>
+  `;
 }
 
 function renderStatusSummary() {
@@ -832,6 +929,7 @@ async function addGoodsBatch(form) {
         createdAt: TODAY,
         photos: lotPhotos,
       });
+      expandedLotIds.add(lotId);
     }
     const status = row.querySelector('[name="status"]').value;
     const baseItem = {
@@ -1399,6 +1497,17 @@ document.querySelector("#goods-search").addEventListener("input", (event) => {
 });
 
 document.addEventListener("click", (event) => {
+  const toggleLot = event.target.closest("[data-toggle-lot]");
+  if (toggleLot) {
+    const lotId = toggleLot.dataset.toggleLot;
+    if (expandedLotIds.has(lotId)) {
+      expandedLotIds.delete(lotId);
+    } else {
+      expandedLotIds.add(lotId);
+    }
+    renderGoods();
+  }
+
   const arriveJump = event.target.closest("[data-arrive-jump]");
   if (arriveJump) {
     document.querySelector('[data-view="arrivals"]').click();

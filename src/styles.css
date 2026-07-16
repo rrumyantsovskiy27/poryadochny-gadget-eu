@@ -394,6 +394,7 @@ input[readonly] {
 
 .mini-card,
 .goods-card,
+.lot-card,
 .arrival-card {
   display: grid;
   gap: 10px;
@@ -405,6 +406,7 @@ input[readonly] {
 
 .mini-card strong,
 .goods-card strong,
+.lot-card strong,
 .arrival-card strong {
   overflow-wrap: anywhere;
 }
@@ -424,6 +426,91 @@ input[readonly] {
   flex-wrap: wrap;
   color: var(--muted);
   font-size: 13px;
+}
+
+.lot-card {
+  background: #ffffff;
+  padding: 0;
+}
+
+.lot-card.open {
+  border-color: rgba(32, 117, 104, 0.34);
+  box-shadow: 0 12px 32px rgba(27, 47, 42, 0.08);
+}
+
+.lot-head {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  padding: 14px;
+  text-align: left;
+}
+
+.lot-main {
+  display: grid;
+  gap: 4px;
+}
+
+.lot-main strong {
+  font-size: 18px;
+}
+
+.lot-main span:not(.lot-kicker),
+.lot-kicker {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.lot-side {
+  display: grid;
+  align-content: space-between;
+  justify-items: end;
+  gap: 10px;
+  min-width: 180px;
+}
+
+.lot-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.lot-toggle {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.lot-photos {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 72px));
+  gap: 8px;
+  padding: 0 14px 14px;
+}
+
+.lot-photos img {
+  width: 72px;
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.lot-items {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  background: #f7faf7;
+  padding: 12px;
 }
 
 .goods-money {
@@ -881,9 +968,19 @@ input[readonly] {
   .panel-head,
   .goods-intro,
   .goods-card-head,
+  .lot-head,
   .goods-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .lot-side {
+    justify-items: start;
+    min-width: 0;
+  }
+
+  .lot-statuses {
+    justify-content: flex-start;
   }
 
   .nav {
