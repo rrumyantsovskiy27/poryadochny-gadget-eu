@@ -1,0 +1,1141 @@
+const STORE_KEY = "poryadochny-gadget-eu-finance-v1";
+const TODAY = new Date().toISOString().slice(0, 10);
+
+const accountBlueprints = [
+  { id: "euro-card", name: "Карта евро" },
+  { id: "euro-cash", name: "Наличные евро" },
+];
+
+const statusLabels = {
+  bought: "Выкуплен",
+  in_transit: "В доставке",
+  arrived: "Прибыл",
+};
+
+const defaultState = {
+  accounts: accountBlueprints.map((account) => ({
+    ...account,
+    currency: "EUR",
+    balance: 0,
+    rate: 100,
+  })),
+  operations: [],
+  goods: [],
+  arrivals: [],
+};
+
+let state = loadState();
+let operationFilter = "all";
+let goodsFilter = "all";
+let goodsSearch = "";
+let applyingRemoteState = false;
+let cloudReady = false;
+let cloudSaveTimer = null;
+let cloudListenerReady = false;
+
+const els = {
+  authScreen: document.querySelector("#auth-screen"),
+  authForm: document.querySelector("#auth-form"),
+  authError: document.querySelector("#auth-error"),
+  logoutButton: document.querySelector("#logout-button"),
+  viewTitle: document.querySelector("#view-title"),
+  saveState: document.querySelector("#save-state"),
+  accountsSummary: document.querySelector("#accounts-summary"),
+  accountsEditor: document.querySelector("#accounts-editor"),
+  accountTotalList: document.querySelector("#account-total-list"),
+  soonGoods: document.querySelector("#soon-goods"),
+  operationAccount: document.querySelector("#operation-account"),
+  operationsTable: document.querySelector("#operations-table"),
+  batchForm: document.querySelector("#goods-batch-form"),
+  batchList: document.querySelector("#batch-list"),
+  batchRowTemplate: document.querySelector("#batch-row-template"),
+  goodsList: document.querySelector("#goods-list"),
+  goodsCount: document.querySelector("#goods-count"),
+  statusSummary: document.querySelector("#status-summary"),
+  arrivalForm: document.querySelector("#arrival-form"),
+  arrivalList: document.querySelector("#arrival-list"),
+  arrivalRowTemplate: document.querySelector("#arrival-row-template"),
+  arrivalPending: document.querySelector("#arrival-pending"),
+  arrivalPendingCount: document.querySelector("#arrival-pending-count"),
+  arrivalLog: document.querySelector("#arrival-log"),
+  arrivalCount: document.querySelector("#arrival-count"),
+};
+
+function loadState() {
+  const raw = localStorage.getItem(STORE_KEY);
+  if (!raw) return structuredClone(defaultState);
+
+  try {
+    return normalizeState(JSON.parse(raw));
+  } catch {
+    return structuredClone(defaultState);
+  }
+}
+
+function normalizeState(data) {
+  const rawAccounts = Array.isArray(data.accounts) ? data.accounts : [];
+  const oldEuroAccounts = rawAccounts.filter((account) => account.currency === "EUR");
+
+  const accounts = accountBlueprints.map((blueprint, index) => {
+    const matched =
+      rawAccounts.find((account) => account.id === blueprint.id) ||
+      rawAccounts.find((account) => String(account.name || "").toLowerCase() === blueprint.name.toLowerCase()) ||
+      oldEuroAccounts[index];
+
+    return {
+      ...blueprint,
+      currency: "EUR",
+      balance: num(matched?.balance),
+      rate: num(matched?.rate) || 100,
+    };
+  });
+
+  const accountIds = new Set(accounts.map((account) => account.id));
+
+  const goods = Array.isArray(data.goods) ? data.goods.map(normalizeGoodsItem) : [];
+  assignMissingSkus(goods);
+
+  return {
+    accounts,
+    operations: Array.isArray(data.operations)
+      ? data.operations.map((operation) => ({
+          id: operation.id || crypto.randomUUID(),
+          type: operation.type === "expense" ? "expense" : "income",
+          date: operation.date || TODAY,
+          accountId: accountIds.has(operation.accountId) ? operation.accountId : accounts[0].id,
+          amount: num(operation.amount),
+          rate: num(operation.rate) || accounts[0].rate,
+          note: String(operation.note || ""),
+        }))
+      : [],
+    goods,
+    arrivals: Array.isArray(data.arrivals)
+      ? data.arrivals.map((arrival) => ({
+          id: arrival.id || crypto.randomUUID(),
+          goodsId: arrival.goodsId || "",
+          date: arrival.date || TODAY,
+          note: String(arrival.note || ""),
+          deliveryEur: num(arrival.deliveryEur),
+          deliveryRate: num(arrival.deliveryRate) || 100,
+          deliveryRub: num(arrival.deliveryRub),
+          photos: normalizePhotos(arrival.photos),
+        }))
+      : [],
+  };
+}
+
+function normalizeGoodsItem(item) {
+  const statusMap = {
+    ordered: "bought",
+    bought: "bought",
+    customs: "in_transit",
+    in_transit: "in_transit",
+    arrived: "arrived",
+  };
+
+  const priceRate = num(item.priceRate || item.rate) || 100;
+  const extraRate = num(item.extraRate || item.rate) || 100;
+
+  return {
+    id: item.id || crypto.randomUUID(),
+    purchaseDate: item.purchaseDate || item.eta || TODAY,
+    name: String(item.name || "").trim(),
+    color: String(item.color || "").trim(),
+    carrier: String(item.carrier || "").trim(),
+    spec: String(item.spec || item.characteristic || "").trim(),
+    priceEur: num(item.priceEur) || num(item.priceRub) / priceRate,
+    priceRate,
+    extraEur: num(item.extraEur || item.deliveryEur) || num(item.deliveryRub) / extraRate,
+    extraRate,
+    status: statusMap[item.status] || "bought",
+    arrivedAt: item.arrivedAt || (item.status === "arrived" ? TODAY : ""),
+    deliveryEur: num(item.deliveryEur),
+    deliveryRate: num(item.deliveryRate) || extraRate,
+    deliveryRub: num(item.deliveryRub),
+    sku: String(item.sku || ""),
+    photos: normalizePhotos(item.photos),
+  };
+}
+
+function normalizePhotos(photos) {
+  if (!Array.isArray(photos)) return [];
+  return photos
+    .filter((photo) => photo && photo.src)
+    .map((photo) => ({
+      id: photo.id || crypto.randomUUID(),
+      src: String(photo.src),
+      name: String(photo.name || "Фото"),
+      addedAt: photo.addedAt || TODAY,
+    }));
+}
+
+function assignMissingSkus(goods) {
+  const used = new Set(goods.map((item) => item.sku).filter(Boolean));
+  let next = nextSkuNumber(goods);
+  goods.forEach((item) => {
+    if (item.sku) return;
+    do {
+      item.sku = makeSku(next);
+      next += 1;
+    } while (used.has(item.sku));
+    used.add(item.sku);
+  });
+}
+
+function nextSkuNumber(goods = state.goods) {
+  return (
+    goods.reduce((max, item) => {
+      const match = String(item.sku || "").match(/^PG-(\d+)$/);
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0) + 1
+  );
+}
+
+function makeSku(number) {
+  return `PG-${String(number).padStart(4, "0")}`;
+}
+
+function saveState() {
+  localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  setSaveStatus(cloudReady ? "сохранено в облаке" : "сохранено локально");
+  if (cloudReady && !applyingRemoteState) queueCloudSave();
+  window.setTimeout(() => {
+    setSaveStatus(cloudReady ? "облако активно" : "локально");
+  }, 900);
+}
+
+function setSaveStatus(text) {
+  els.saveState.textContent = text;
+}
+
+function queueCloudSave() {
+  window.clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = window.setTimeout(async () => {
+    try {
+      setSaveStatus("синхронизация");
+      await window.cloudStore.save(state);
+      setSaveStatus("облако активно");
+    } catch {
+      setSaveStatus("ошибка облака");
+    }
+  }, 450);
+}
+
+async function initCloudSync() {
+  if (!window.cloudStore?.isConfigured()) {
+    setSaveStatus("локально");
+    showAuthScreen(false);
+    return;
+  }
+
+  try {
+    setSaveStatus("подключение");
+    const result = await window.cloudStore.init();
+    if (!result.ok) {
+      setSaveStatus("локально");
+      showAuthScreen(false);
+      return;
+    }
+
+    if (window.cloudStore.requiresAuth()) {
+      const user = await window.cloudStore.getUser();
+      if (!user) {
+        cloudReady = false;
+        showAuthScreen(true);
+        setSaveStatus("нужен вход");
+        return;
+      }
+      showAuthScreen(false);
+    }
+
+    cloudReady = true;
+    setSaveStatus("облако активно");
+    const remoteState = await window.cloudStore.load();
+    if (remoteState) {
+      state = normalizeState(remoteState);
+      localStorage.setItem(STORE_KEY, JSON.stringify(state));
+      render();
+    } else {
+      await window.cloudStore.save(state);
+    }
+
+    if (!cloudListenerReady) {
+      cloudListenerReady = true;
+      window.cloudStore.onRemoteState(
+        (remoteState) => {
+          applyingRemoteState = true;
+          state = normalizeState(remoteState);
+          localStorage.setItem(STORE_KEY, JSON.stringify(state));
+          render();
+          applyingRemoteState = false;
+          setSaveStatus("обновлено из облака");
+          window.setTimeout(() => setSaveStatus("облако активно"), 900);
+        },
+        () => setSaveStatus("ошибка облака"),
+      );
+    }
+
+  } catch {
+    cloudReady = false;
+    setSaveStatus("локально");
+  }
+}
+
+function showAuthScreen(show) {
+  els.authScreen?.classList.toggle("hidden", !show);
+  els.logoutButton?.classList.toggle("hidden", show || !window.cloudStore?.requiresAuth());
+  if (!show && els.authError) els.authError.textContent = "";
+}
+
+function money(value, currency = "RUB") {
+  return new Intl.NumberFormat("ru-RU", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: currency === "RUB" ? 0 : 2,
+  }).format(Number(value) || 0);
+}
+
+function num(value) {
+  return Number(value) || 0;
+}
+
+function accountRub(account) {
+  return num(account.balance) * num(account.rate);
+}
+
+function goodsPriceRub(item) {
+  return num(item.priceEur) * (num(item.priceRate) || 0);
+}
+
+function goodsExtraRub(item) {
+  return num(item.extraEur) * (num(item.extraRate) || 0);
+}
+
+function goodsDeliveryRub(item) {
+  if (num(item.deliveryRub)) return num(item.deliveryRub);
+  return num(item.deliveryEur) * (num(item.deliveryRate) || 0);
+}
+
+function goodsRub(item) {
+  return goodsPriceRub(item) + goodsExtraRub(item) + goodsDeliveryRub(item);
+}
+
+function goodsEur(item) {
+  const deliveryRate = num(item.deliveryRate) || getAverageAccountRate() || 1;
+  const deliveryEur = num(item.deliveryEur) || num(item.deliveryRub) / deliveryRate;
+  return num(item.priceEur) + num(item.extraEur) + deliveryEur;
+}
+
+function averageGoodsRate(goods = state.goods) {
+  const totalEur = goods.reduce((sum, item) => sum + goodsEur(item), 0);
+  const totalRub = goods.reduce((sum, item) => sum + goodsRub(item), 0);
+  return totalEur ? totalRub / totalEur : 0;
+}
+
+function getAccountName(id) {
+  return state.accounts.find((account) => account.id === id)?.name || "Карта евро";
+}
+
+function formatDate(value) {
+  if (!value) return "-";
+  return new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit" }).format(
+    new Date(`${value}T12:00:00`),
+  );
+}
+
+function emptyNode(text = "Добавьте первую запись через форму выше.") {
+  const node = document.querySelector("#empty-template").content.firstElementChild.cloneNode(true);
+  node.querySelector("span").textContent = text;
+  return node;
+}
+
+function render() {
+  renderMetrics();
+  renderAccounts();
+  renderAccountSelects();
+  renderOperations();
+  renderGoods();
+  renderArrivals();
+}
+
+function renderMetrics() {
+  const cardAccount = state.accounts.find((account) => account.id === "euro-card") || state.accounts[0];
+  const cashAccount = state.accounts.find((account) => account.id === "euro-cash") || state.accounts[1] || state.accounts[0];
+  const goodsRubTotal = state.goods.reduce((sum, item) => sum + goodsRub(item), 0);
+  const goodsEurTotal = state.goods.reduce((sum, item) => sum + goodsEur(item), 0);
+  const goodsRate = averageGoodsRate();
+  const activeGoods = state.goods.filter((item) => item.status !== "arrived").slice(0, 5);
+
+  document.querySelector("#metric-card-rub").textContent = money(accountRub(cardAccount));
+  document.querySelector("#metric-card-eur").textContent = `${money(cardAccount?.balance, "EUR")} · курс ${num(cardAccount?.rate).toFixed(2)}`;
+  document.querySelector("#metric-cash-rub").textContent = money(accountRub(cashAccount));
+  document.querySelector("#metric-cash-eur").textContent = `${money(cashAccount?.balance, "EUR")} · курс ${num(cashAccount?.rate).toFixed(2)}`;
+  document.querySelector("#metric-goods-rub").textContent = money(goodsRubTotal);
+  document.querySelector("#metric-goods-eur").textContent = `${money(goodsEurTotal, "EUR")} · средний курс ${goodsRate.toFixed(2)}`;
+  document.querySelector("#metric-goods-count").textContent = state.goods.length;
+  document.querySelector("#metric-goods-count-money").textContent = `${money(goodsRubTotal)} · ${money(goodsEurTotal, "EUR")}`;
+
+  els.soonGoods.replaceChildren(
+    ...(activeGoods.length ? activeGoods.map(renderMiniGoods) : [emptyNode("Товары появятся здесь после ввода партии.")]),
+  );
+}
+
+function renderAccounts() {
+  els.accountsSummary.replaceChildren(
+    ...state.accounts.map((account) => {
+      const row = document.createElement("tr");
+      row.innerHTML = `
+        <td><strong>${escapeHtml(account.name)}</strong></td>
+        <td>${money(account.balance, "EUR")}</td>
+        <td>${num(account.rate).toFixed(2)}</td>
+        <td><strong>${money(accountRub(account))}</strong></td>
+      `;
+      return row;
+    }),
+  );
+
+  els.accountTotalList.replaceChildren(
+    ...state.accounts.map((account) => {
+      const card = document.createElement("article");
+      card.className = "mini-card";
+      card.innerHTML = `
+        <div class="mini-row">
+          <strong>${escapeHtml(account.name)}</strong>
+          <span>${num(account.rate).toFixed(2)} ₽/€</span>
+        </div>
+        <div class="mini-row">
+          <span>${money(account.balance, "EUR")}</span>
+          <strong>${money(accountRub(account))}</strong>
+        </div>
+      `;
+      return card;
+    }),
+  );
+
+  els.accountsEditor.replaceChildren(
+    ...state.accounts.map((account) => {
+      const card = document.createElement("article");
+      card.className = "account-editor-card";
+      card.innerHTML = `
+        <div class="panel-head">
+          <h3>${escapeHtml(account.name)}</h3>
+          <span class="muted" data-account-rub="${account.id}">${money(accountRub(account))}</span>
+        </div>
+        <div class="inline-fields">
+          <label>
+            Сумма в евро
+            <input name="balance-${account.id}" type="number" step="0.01" min="0" value="${num(account.balance)}" data-account-input="${account.id}" />
+          </label>
+          <label>
+            Курс
+            <input name="rate-${account.id}" type="number" step="0.01" min="0" value="${num(account.rate)}" data-account-input="${account.id}" />
+          </label>
+        </div>
+      `;
+      return card;
+    }),
+  );
+}
+
+function renderAccountSelects() {
+  const options = state.accounts.map((account) => {
+    const option = document.createElement("option");
+    option.value = account.id;
+    option.textContent = `${account.name} · EUR`;
+    return option;
+  });
+
+  els.operationAccount.replaceChildren(...options);
+}
+
+function renderOperations() {
+  const rows = state.operations
+    .filter((op) => operationFilter === "all" || op.type === operationFilter)
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .map((op) => {
+      const row = document.createElement("tr");
+      row.innerHTML = `
+        <td>${formatDate(op.date)}</td>
+        <td>${op.type === "income" ? "Приход" : "Расход"}</td>
+        <td>${escapeHtml(getAccountName(op.accountId))}</td>
+        <td><strong>${money(op.amount, "EUR")}</strong></td>
+        <td>${money(num(op.amount) * (num(op.rate) || 0))}</td>
+        <td>${escapeHtml(op.note || "")}</td>
+        <td><button class="delete-button" type="button" data-delete-operation="${op.id}" title="Удалить">×</button></td>
+      `;
+      return row;
+    });
+
+  els.operationsTable.replaceChildren(...(rows.length ? rows : []));
+}
+
+function renderGoods() {
+  const query = goodsSearch.trim().toLowerCase();
+  const filtered = state.goods
+    .filter((item) => goodsFilter === "all" || item.status === goodsFilter)
+    .filter((item) => {
+      if (!query) return true;
+      return [item.sku, item.name, item.color, item.spec, item.carrier].join(" ").toLowerCase().includes(query);
+    })
+    .sort((a, b) => {
+      if (a.status === "arrived" && b.status !== "arrived") return 1;
+      if (a.status !== "arrived" && b.status === "arrived") return -1;
+      return b.purchaseDate.localeCompare(a.purchaseDate);
+    });
+
+  const totalRub = filtered.reduce((sum, item) => sum + goodsRub(item), 0);
+  const totalEur = filtered.reduce((sum, item) => sum + goodsEur(item), 0);
+
+  document.querySelector("#goods-total-rub").textContent = money(totalRub);
+  document.querySelector("#goods-total-eur").textContent = money(totalEur, "EUR");
+  els.goodsCount.textContent = `${filtered.length} ${plural(filtered.length, ["позиция", "позиции", "позиций"])}`;
+  els.goodsList.replaceChildren(
+    ...(filtered.length ? filtered.map(renderGoodsCard) : [emptyNode("Начните ввод партии, чтобы быстро занести несколько товаров.")]),
+  );
+  renderStatusSummary();
+}
+
+function renderStatusSummary() {
+  const counts = Object.keys(statusLabels).map((status) => ({
+    status,
+    count: state.goods.filter((item) => item.status === status).length,
+  }));
+
+  els.statusSummary.replaceChildren(
+    ...counts.map((item) => {
+      const row = document.createElement("div");
+      row.className = "status-row";
+      row.innerHTML = `
+        <span class="status ${item.status}">${statusLabels[item.status]}</span>
+        <strong>${item.count}</strong>
+      `;
+      return row;
+    }),
+  );
+}
+
+function renderMiniGoods(item) {
+  const card = document.createElement("article");
+  card.className = "mini-card";
+  card.innerHTML = `
+    <div class="mini-row">
+      <strong>${escapeHtml(item.sku)} · ${escapeHtml(item.name)}</strong>
+      <span class="status ${item.status}">${statusLabels[item.status]}</span>
+    </div>
+    <div class="mini-row">
+      <span>${escapeHtml([item.color, item.spec].filter(Boolean).join(" · ") || "без характеристики")}</span>
+      <strong>${money(goodsRub(item))}</strong>
+    </div>
+  `;
+  return card;
+}
+
+function renderGoodsCard(item) {
+  const card = document.createElement("article");
+  card.className = "goods-card";
+  card.innerHTML = `
+    <div class="goods-card-head">
+      <div>
+        <div class="sku-line">${escapeHtml(item.sku)}</div>
+        <strong>${escapeHtml(item.name)}</strong>
+        <div class="goods-subtitle">${escapeHtml([item.color, item.spec].filter(Boolean).join(" · ") || "характеристика не указана")}</div>
+      </div>
+      <span class="status ${item.status}">${statusLabels[item.status]}</span>
+    </div>
+    <div class="goods-meta">
+      <span>Дата покупки: ${formatDate(item.purchaseDate)}</span>
+      <span>Перевозчик: ${escapeHtml(item.carrier || "не указан")}</span>
+      ${item.arrivedAt ? `<span>Прибыл: ${formatDate(item.arrivedAt)}</span>` : ""}
+    </div>
+    <div class="goods-money">
+      <div class="money-chip"><span>Цена EUR</span><strong>${money(item.priceEur, "EUR")}</strong></div>
+      <div class="money-chip"><span>Курс цены</span><strong>${num(item.priceRate).toFixed(2)}</strong></div>
+      <div class="money-chip"><span>Цена RUB</span><strong>${money(goodsPriceRub(item))}</strong></div>
+      <div class="money-chip"><span>Доп. затраты EUR</span><strong>${money(item.extraEur, "EUR")}</strong></div>
+      <div class="money-chip"><span>Курс затрат</span><strong>${num(item.extraRate).toFixed(2)}</strong></div>
+      <div class="money-chip"><span>Затраты RUB</span><strong>${money(goodsExtraRub(item))}</strong></div>
+      <div class="money-chip"><span>Доставка EUR</span><strong>${money(item.deliveryEur, "EUR")}</strong></div>
+      <div class="money-chip"><span>Курс доставки</span><strong>${num(item.deliveryRate).toFixed(2)}</strong></div>
+      <div class="money-chip"><span>Доставка RUB</span><strong>${money(goodsDeliveryRub(item))}</strong></div>
+    </div>
+    ${renderPhotoGallery(item)}
+    <div class="goods-actions">
+      <strong>Итого: ${money(goodsRub(item))} · ${money(goodsEur(item), "EUR")}</strong>
+      <div class="actions">
+        ${
+          item.status !== "arrived"
+            ? `<button class="arrive-button" type="button" data-arrive-jump="${item.id}">Принять</button>`
+            : ""
+        }
+        <button class="delete-button" type="button" data-delete-goods="${item.id}" title="Удалить">×</button>
+      </div>
+    </div>
+  `;
+  return card;
+}
+
+function renderPhotoGallery(item) {
+  if (!item.photos?.length) return "";
+  return `
+    <div class="photo-grid">
+      ${item.photos
+        .map(
+          (photo) => `
+            <figure class="photo-thumb">
+              <img src="${photo.src}" alt="${escapeHtml(item.sku)}" />
+              <button class="photo-remove" type="button" data-remove-photo="${item.id}:${photo.id}" title="Удалить фото">×</button>
+            </figure>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderArrivals() {
+  const pending = state.goods
+    .filter((item) => item.status === "in_transit")
+    .sort((a, b) => a.sku.localeCompare(b.sku));
+
+  els.arrivalPending.replaceChildren(
+    ...(pending.length ? pending.slice(0, 8).map(renderMiniGoods) : [emptyNode("Нет товаров со статусом «В доставке».")]),
+  );
+  els.arrivalPendingCount.textContent = `${pending.length} ${plural(pending.length, ["позиция", "позиции", "позиций"])}`;
+  els.arrivalList.querySelectorAll(".batch-row").forEach(populateArrivalRowSelect);
+
+  const arrivals = [...state.arrivals].sort((a, b) => b.date.localeCompare(a.date));
+  els.arrivalCount.textContent = `${arrivals.length} ${plural(arrivals.length, ["запись", "записи", "записей"])}`;
+  els.arrivalLog.replaceChildren(
+    ...(arrivals.length ? arrivals.map(renderArrivalCard) : [emptyNode("Журнал заполнится после регистрации первого прибытия.")]),
+  );
+}
+
+function renderArrivalCard(arrival) {
+  const item = state.goods.find((goods) => goods.id === arrival.goodsId);
+  const card = document.createElement("article");
+  card.className = "arrival-card";
+  card.innerHTML = `
+    <div class="goods-card-head">
+      <div>
+        <div class="sku-line">${escapeHtml(item?.sku || "без артикула")}</div>
+        <strong>${escapeHtml(item?.name || "Товар удален")}</strong>
+        <div class="goods-subtitle">${escapeHtml([item?.color, item?.spec].filter(Boolean).join(" · ") || "характеристика не указана")}</div>
+      </div>
+      <strong>${formatDate(arrival.date)}</strong>
+    </div>
+    <div class="goods-money">
+      <div class="money-chip"><span>Доставка EUR</span><strong>${money(arrival.deliveryEur, "EUR")}</strong></div>
+      <div class="money-chip"><span>Курс доставки</span><strong>${num(arrival.deliveryRate).toFixed(2)}</strong></div>
+      <div class="money-chip"><span>Доставка RUB</span><strong>${money(arrival.deliveryRub)}</strong></div>
+    </div>
+    ${arrival.note ? `<p class="arrival-note">${escapeHtml(arrival.note)}</p>` : ""}
+    ${arrival.photos?.length ? renderArrivalPhotos(arrival) : ""}
+  `;
+  return card;
+}
+
+function renderArrivalPhotos(arrival) {
+  return `
+    <div class="photo-grid">
+      ${arrival.photos
+        .map(
+          (photo) => `
+            <figure class="photo-thumb">
+              <img src="${photo.src}" alt="Фото прибытия" />
+            </figure>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function updateAccounts(form) {
+  state.accounts = state.accounts.map((account) => ({
+    ...account,
+    balance: num(form.elements[`balance-${account.id}`]?.value),
+    rate: num(form.elements[`rate-${account.id}`]?.value) || 100,
+  }));
+  commit();
+}
+
+function updateAccountPreview(input) {
+  const id = input.dataset.accountInput;
+  const card = input.closest(".account-editor-card");
+  const balance = num(card.querySelector(`[name="balance-${id}"]`)?.value);
+  const rate = num(card.querySelector(`[name="rate-${id}"]`)?.value);
+  const preview = card.querySelector(`[data-account-rub="${id}"]`);
+  if (preview) preview.textContent = money(balance * rate);
+}
+
+function addOperation(form) {
+  const data = new FormData(form);
+  const account = state.accounts.find((item) => item.id === data.get("accountId"));
+  if (!account) return;
+
+  const amount = num(data.get("amount"));
+  const sign = data.get("type") === "income" ? 1 : -1;
+  account.balance = num(account.balance) + amount * sign;
+  state.operations.push({
+    id: crypto.randomUUID(),
+    type: String(data.get("type")),
+    date: String(data.get("date")),
+    accountId: account.id,
+    amount,
+    rate: num(account.rate),
+    note: String(data.get("note") || "").trim(),
+  });
+  form.reset();
+  form.elements.date.value = TODAY;
+  commit();
+}
+
+function addBatchRow(values = {}) {
+  els.batchForm.classList.remove("hidden");
+  const row = els.batchRowTemplate.content.firstElementChild.cloneNode(true);
+  row.querySelector('[name="purchaseDate"]').value = values.purchaseDate || TODAY;
+  row.querySelector('[name="priceRate"]').value = values.priceRate || getAverageAccountRate();
+  row.querySelector('[name="extraRate"]').value = values.extraRate || getAverageAccountRate();
+  els.batchList.append(row);
+  refreshBatchRows();
+  calculateBatchRow(row);
+}
+
+function getAverageAccountRate() {
+  const rates = state.accounts.map((account) => num(account.rate)).filter(Boolean);
+  if (!rates.length) return 100;
+  return Number((rates.reduce((sum, rate) => sum + rate, 0) / rates.length).toFixed(2));
+}
+
+function calculateBatchRow(row) {
+  const priceEur = num(row.querySelector('[name="priceEur"]').value);
+  const priceRate = num(row.querySelector('[name="priceRate"]').value);
+  const extraEur = num(row.querySelector('[name="extraEur"]').value);
+  const extraRate = num(row.querySelector('[name="extraRate"]').value);
+  row.querySelector('[name="priceRub"]').value = money(priceEur * priceRate);
+  row.querySelector('[name="extraRub"]').value = money(extraEur * extraRate);
+}
+
+function refreshBatchRows() {
+  els.batchList.querySelectorAll(".batch-row").forEach((row, index) => {
+    row.querySelector(".batch-row-title").textContent = `Товар ${index + 1}`;
+    const removeButton = row.querySelector("[data-remove-row]");
+    removeButton.disabled = els.batchList.children.length === 1;
+  });
+}
+
+async function addGoodsBatch(form) {
+  const rows = [...form.querySelectorAll(".batch-row")];
+  let skuNumber = nextSkuNumber();
+  const goods = (
+    await Promise.all(
+      rows.map(async (row) => ({
+      id: crypto.randomUUID(),
+      sku: makeSku(skuNumber++),
+      purchaseDate: row.querySelector('[name="purchaseDate"]').value || TODAY,
+      name: row.querySelector('[name="name"]').value.trim(),
+      color: row.querySelector('[name="color"]').value.trim(),
+      carrier: row.querySelector('[name="carrier"]').value.trim(),
+      spec: row.querySelector('[name="spec"]').value.trim(),
+      priceEur: num(row.querySelector('[name="priceEur"]').value),
+      priceRate: num(row.querySelector('[name="priceRate"]').value) || 100,
+      extraEur: num(row.querySelector('[name="extraEur"]').value),
+      extraRate: num(row.querySelector('[name="extraRate"]').value) || 100,
+      status: row.querySelector('[name="status"]').value,
+      arrivedAt: row.querySelector('[name="status"]').value === "arrived" ? TODAY : "",
+      deliveryEur: 0,
+      deliveryRate: getAverageAccountRate(),
+      deliveryRub: 0,
+      photos: await filesToPhotos(row.querySelector('[name="photos"]').files),
+      })),
+    )
+  ).filter((item) => item.name);
+
+  if (!goods.length) {
+    alert("Заполните хотя бы одно название товара.");
+    return;
+  }
+
+  state.goods.push(...goods);
+  form.reset();
+  els.batchList.replaceChildren();
+  els.batchForm.classList.add("hidden");
+  commit();
+}
+
+function addArrivalRow(selectedGoodsId = "") {
+  els.arrivalForm.classList.remove("hidden");
+  const row = els.arrivalRowTemplate.content.firstElementChild.cloneNode(true);
+  row.querySelector('[name="arrivalDate"]').value = TODAY;
+  row.querySelector('[name="deliveryRate"]').value = getAverageAccountRate();
+  els.arrivalList.append(row);
+  populateArrivalRowSelect(row, selectedGoodsId);
+  refreshArrivalRows();
+}
+
+function getArrivalGoodsOptions(selectedGoodsId = "") {
+  const selected = state.goods.find((item) => item.id === selectedGoodsId);
+  const goods = state.goods
+    .filter((item) => item.status === "in_transit" || item.id === selectedGoodsId)
+    .sort((a, b) => a.sku.localeCompare(b.sku));
+  return selected && !goods.some((item) => item.id === selected.id) ? [selected, ...goods] : goods;
+}
+
+function populateArrivalRowSelect(row, selectedGoodsId = row.querySelector('[name="goodsId"]').value) {
+  const select = row.querySelector('[name="goodsId"]');
+  const options = getArrivalGoodsOptions(selectedGoodsId).map((item) => {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = `${item.sku} · ${item.name}${item.color ? ` · ${item.color}` : ""}`;
+    return option;
+  });
+
+  if (!options.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Нет товаров в доставке";
+    select.replaceChildren(option);
+    select.disabled = true;
+    return;
+  }
+
+  select.replaceChildren(...options);
+  select.disabled = false;
+  select.value = selectedGoodsId || options[0].value;
+}
+
+function calculateArrivalRow(row) {
+  const deliveryEur = num(row.querySelector('[name="deliveryEur"]').value);
+  const deliveryRate = num(row.querySelector('[name="deliveryRate"]').value);
+  const deliveryRub = row.querySelector('[name="deliveryRub"]');
+  if (deliveryEur && deliveryRate) {
+    deliveryRub.value = Number((deliveryEur * deliveryRate).toFixed(2));
+  }
+}
+
+function refreshArrivalRows() {
+  els.arrivalList.querySelectorAll(".batch-row").forEach((row, index) => {
+    row.querySelector(".batch-row-title").textContent = `Прибытие ${index + 1}`;
+    const removeButton = row.querySelector("[data-remove-arrival-row]");
+    removeButton.disabled = els.arrivalList.children.length === 1;
+  });
+}
+
+function addArrivalsBatch(form) {
+  const rows = [...form.querySelectorAll(".batch-row")];
+  const arrivals = rows
+    .map((row) => {
+      const goodsId = row.querySelector('[name="goodsId"]').value;
+      const item = state.goods.find((goods) => goods.id === goodsId);
+      if (!item) return null;
+
+      const deliveryRate = num(row.querySelector('[name="deliveryRate"]').value) || getAverageAccountRate();
+      const deliveryEur = num(row.querySelector('[name="deliveryEur"]').value);
+      const deliveryRub = num(row.querySelector('[name="deliveryRub"]').value) || deliveryEur * deliveryRate;
+      const date = row.querySelector('[name="arrivalDate"]').value || TODAY;
+      item.status = "arrived";
+      item.arrivedAt = date;
+      item.deliveryEur = deliveryEur;
+      item.deliveryRate = deliveryRate;
+      item.deliveryRub = deliveryRub;
+
+      return {
+        id: crypto.randomUUID(),
+        goodsId: item.id,
+        date,
+        note: row.querySelector('[name="note"]').value.trim(),
+        deliveryEur,
+        deliveryRate,
+        deliveryRub,
+        photos: [],
+      };
+    })
+    .filter(Boolean);
+
+  if (!arrivals.length) {
+    alert("Выберите хотя бы один товар в доставке.");
+    return;
+  }
+
+  state.arrivals.push(...arrivals);
+  form.reset();
+  els.arrivalList.replaceChildren();
+  els.arrivalForm.classList.add("hidden");
+  commit();
+}
+
+async function filesToPhotos(files) {
+  const picked = [...files].filter((file) => file.type.startsWith("image/")).slice(0, 8);
+  return Promise.all(picked.map(fileToPhoto));
+}
+
+function fileToPhoto(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const image = new Image();
+      image.addEventListener("load", () => {
+        const maxSize = 1200;
+        const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        const context = canvas.getContext("2d");
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+        Promise.resolve(window.cloudStore?.uploadPhoto(dataUrl, file.name) || dataUrl)
+          .then((src) =>
+            resolve({
+              id: crypto.randomUUID(),
+              src,
+              name: file.name,
+              addedAt: TODAY,
+            }),
+          )
+          .catch(() =>
+            resolve({
+              id: crypto.randomUUID(),
+              src: dataUrl,
+              name: file.name,
+              addedAt: TODAY,
+            }),
+          );
+      });
+      image.addEventListener("error", reject);
+      image.src = String(reader.result);
+    });
+    reader.addEventListener("error", reject);
+    reader.readAsDataURL(file);
+  });
+}
+
+function commit() {
+  saveState();
+  render();
+}
+
+function exportData() {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `poryadochny-gadget-eu-finance-${new Date().toISOString().slice(0, 10)}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function importData(file) {
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    try {
+      const parsed = JSON.parse(String(reader.result));
+      if (!Array.isArray(parsed.accounts) || !Array.isArray(parsed.goods) || !Array.isArray(parsed.operations)) {
+        throw new Error("bad shape");
+      }
+      state = normalizeState(parsed);
+      commit();
+    } catch {
+      alert("Не получилось прочитать файл. Нужен JSON, экспортированный из этого приложения.");
+    }
+  });
+  reader.readAsText(file);
+}
+
+function plural(count, forms) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return forms[0];
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return forms[1];
+  return forms[2];
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+document.querySelectorAll(".nav-button").forEach((button) => {
+  button.addEventListener("click", () => {
+    document.querySelectorAll(".nav-button").forEach((item) => item.classList.remove("active"));
+    document.querySelectorAll(".view").forEach((view) => view.classList.remove("active"));
+    button.classList.add("active");
+    document.querySelector(`#${button.dataset.view}-view`).classList.add("active");
+    els.viewTitle.textContent = button.textContent;
+  });
+});
+
+document.querySelectorAll("[data-view-jump]").forEach((button) => {
+  button.addEventListener("click", () => {
+    document.querySelector(`[data-view="${button.dataset.viewJump}"]`).click();
+  });
+});
+
+els.authForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const data = new FormData(event.currentTarget);
+  const email = String(data.get("email") || "").trim();
+  const password = String(data.get("password") || "");
+
+  try {
+    els.authError.textContent = "";
+    setSaveStatus("вход");
+    await window.cloudStore.signIn(email, password);
+    await initCloudSync();
+  } catch (error) {
+    els.authError.textContent = "Не получилось войти. Проверьте email и пароль.";
+    setSaveStatus("нужен вход");
+  }
+});
+
+els.logoutButton?.addEventListener("click", async () => {
+  await window.cloudStore?.signOut();
+  cloudReady = false;
+  cloudListenerReady = false;
+  showAuthScreen(true);
+  setSaveStatus("нужен вход");
+});
+
+document.querySelector("#accounts-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  updateAccounts(event.currentTarget);
+});
+
+document.querySelector("#accounts-editor").addEventListener("input", (event) => {
+  const input = event.target.closest("[data-account-input]");
+  if (input) updateAccountPreview(input);
+});
+
+document.querySelector("#operation-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  addOperation(event.currentTarget);
+});
+
+document.querySelector("#start-batch-button").addEventListener("click", () => {
+  if (!els.batchList.children.length) addBatchRow();
+  els.batchForm.classList.remove("hidden");
+});
+
+document.querySelector("#add-goods-row").addEventListener("click", () => addBatchRow());
+
+els.batchList.addEventListener("input", (event) => {
+  if (event.target.closest("[data-calc]")) {
+    calculateBatchRow(event.target.closest(".batch-row"));
+  }
+});
+
+els.batchList.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-remove-row]");
+  if (!button || els.batchList.children.length <= 1) return;
+  button.closest(".batch-row").remove();
+  refreshBatchRows();
+});
+
+document.querySelector("#goods-batch-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await addGoodsBatch(event.currentTarget);
+});
+
+document.querySelector("#start-arrival-button").addEventListener("click", () => {
+  if (!els.arrivalList.children.length) addArrivalRow();
+  els.arrivalForm.classList.remove("hidden");
+});
+
+document.querySelector("#add-arrival-row").addEventListener("click", () => addArrivalRow());
+
+els.arrivalList.addEventListener("input", (event) => {
+  if (event.target.closest("[data-arrival-calc]")) {
+    calculateArrivalRow(event.target.closest(".batch-row"));
+  }
+});
+
+els.arrivalList.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-remove-arrival-row]");
+  if (!button || els.arrivalList.children.length <= 1) return;
+  button.closest(".batch-row").remove();
+  refreshArrivalRows();
+});
+
+document.querySelector("#arrival-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  addArrivalsBatch(event.currentTarget);
+});
+
+document.querySelector("#operation-filter").addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  operationFilter = button.dataset.filter;
+  document.querySelectorAll("#operation-filter button").forEach((item) => item.classList.remove("active"));
+  button.classList.add("active");
+  renderOperations();
+});
+
+document.querySelector("#goods-status-filter").addEventListener("change", (event) => {
+  goodsFilter = event.target.value;
+  renderGoods();
+});
+
+document.querySelector("#goods-search").addEventListener("input", (event) => {
+  goodsSearch = event.target.value;
+  renderGoods();
+});
+
+document.addEventListener("click", (event) => {
+  const arriveJump = event.target.closest("[data-arrive-jump]");
+  if (arriveJump) {
+    document.querySelector('[data-view="arrivals"]').click();
+    if (!els.arrivalList.children.length) {
+      addArrivalRow(arriveJump.dataset.arriveJump);
+    } else {
+      populateArrivalRowSelect(els.arrivalList.querySelector(".batch-row"), arriveJump.dataset.arriveJump);
+    }
+    els.arrivalForm.classList.remove("hidden");
+  }
+
+  const deleteGoods = event.target.closest("[data-delete-goods]");
+  if (deleteGoods && confirm("Удалить товар?")) {
+    state.goods = state.goods.filter((item) => item.id !== deleteGoods.dataset.deleteGoods);
+    state.arrivals = state.arrivals.filter((arrival) => arrival.goodsId !== deleteGoods.dataset.deleteGoods);
+    commit();
+  }
+
+  const removePhoto = event.target.closest("[data-remove-photo]");
+  if (removePhoto) {
+    const [goodsId, photoId] = removePhoto.dataset.removePhoto.split(":");
+    const item = state.goods.find((goods) => goods.id === goodsId);
+    if (item) {
+      item.photos = (item.photos || []).filter((photo) => photo.id !== photoId);
+      commit();
+    }
+  }
+
+  const deleteOperation = event.target.closest("[data-delete-operation]");
+  if (deleteOperation && confirm("Удалить операцию? Остаток счета не изменится автоматически.")) {
+    state.operations = state.operations.filter((item) => item.id !== deleteOperation.dataset.deleteOperation);
+    commit();
+  }
+});
+
+document.querySelector("#export-button").addEventListener("click", exportData);
+document.querySelector("#settings-export").addEventListener("click", exportData);
+document.querySelector("#import-file").addEventListener("change", (event) => {
+  const [file] = event.target.files;
+  if (file) importData(file);
+  event.target.value = "";
+});
+
+document.querySelector("#reset-demo").addEventListener("click", () => {
+  if (confirm("Сбросить данные к пустому шаблону?")) {
+    state = structuredClone(defaultState);
+    commit();
+  }
+});
+
+document.querySelector("#operation-form").elements.date.value = TODAY;
+state = normalizeState(state);
+saveState();
+render();
+initCloudSync();

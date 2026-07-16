@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Учет финансов Порядочный гаджет ЕС</title>
+    <link rel="stylesheet" href="src/styles.css" />
+  </head>
+  <body>
+    <section class="auth-screen hidden" id="auth-screen">
+      <form class="auth-card" id="auth-form">
+        <div>
+          <p class="eyebrow">Порядочный гаджет ЕС</p>
+          <h1>Вход в учет</h1>
+        </div>
+        <label>
+          Email
+          <input name="email" type="email" autocomplete="email" required placeholder="you@example.com" />
+        </label>
+        <label>
+          Пароль
+          <input name="password" type="password" autocomplete="current-password" required placeholder="••••••••" />
+        </label>
+        <button class="primary-button" type="submit">Войти</button>
+        <p class="auth-error" id="auth-error"></p>
+      </form>
+    </section>
+
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">PG</div>
+          <div>
+            <p class="eyebrow">Порядочный гаджет ЕС</p>
+            <h1>Учет финансов</h1>
+          </div>
+        </div>
+
+        <nav class="nav" aria-label="Разделы">
+          <button class="nav-button active" data-view="dashboard" type="button">Обзор</button>
+          <button class="nav-button" data-view="money" type="button">ДДС</button>
+          <button class="nav-button" data-view="goods" type="button">Товары</button>
+          <button class="nav-button" data-view="arrivals" type="button">Прибытия</button>
+          <button class="nav-button" data-view="settings" type="button">Резерв</button>
+        </nav>
+
+        <div class="sidebar-foot">
+          <div>
+            <span>Хранение</span>
+            <strong id="save-state">сохранено</strong>
+          </div>
+          <button class="logout-button hidden" id="logout-button" type="button">Выйти</button>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <section class="topbar">
+          <div>
+            <p class="eyebrow">Панель</p>
+            <h2 id="view-title">Обзор</h2>
+          </div>
+          <div class="actions">
+            <button class="icon-button" id="export-button" type="button" title="Экспорт данных">↧</button>
+            <label class="icon-button file-button" title="Импорт данных">
+              ↥
+              <input id="import-file" type="file" accept="application/json" />
+            </label>
+          </div>
+        </section>
+
+        <section class="view active" id="dashboard-view">
+          <div class="metrics-grid compact">
+            <article class="metric">
+              <span>Остаток на карте</span>
+              <strong id="metric-card-rub">0 ₽</strong>
+              <small id="metric-card-eur">0 € · курс 0</small>
+            </article>
+            <article class="metric">
+              <span>Остаток наличными</span>
+              <strong id="metric-cash-rub">0 ₽</strong>
+              <small id="metric-cash-eur">0 € · курс 0</small>
+            </article>
+            <article class="metric">
+              <span>Деньги в товаре</span>
+              <strong id="metric-goods-rub">0 ₽</strong>
+              <small id="metric-goods-eur">0 € · средний курс 0</small>
+            </article>
+            <article class="metric">
+              <span>Товаров всего</span>
+              <strong id="metric-goods-count">0</strong>
+              <small id="metric-goods-count-money">0 ₽ · 0 €</small>
+            </article>
+          </div>
+
+          <div class="split-layout">
+            <section class="panel">
+              <div class="panel-head">
+                <h3>Счета</h3>
+                <button class="small-button" data-view-jump="money" type="button">Открыть ДДС</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Счет</th>
+                      <th>Сумма в евро</th>
+                      <th>Курс</th>
+                      <th>Сумма в рублях</th>
+                    </tr>
+                  </thead>
+                  <tbody id="accounts-summary"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <h3>Товары в работе</h3>
+                <button class="small-button" data-view-jump="goods" type="button">Открыть товары</button>
+              </div>
+              <div class="cards-list" id="soon-goods"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="money-view">
+          <form class="panel form-panel" id="accounts-form">
+            <div class="panel-head">
+              <h3>Счета в евро</h3>
+              <button class="primary-button" type="submit">Сохранить счета</button>
+            </div>
+            <div class="account-editor-grid" id="accounts-editor"></div>
+          </form>
+
+          <div class="form-grid">
+            <form class="panel form-panel" id="operation-form">
+              <div class="panel-head">
+                <h3>Операция ДДС</h3>
+              </div>
+              <div class="inline-fields">
+                <label>
+                  Тип
+                  <select name="type">
+                    <option value="income">Приход</option>
+                    <option value="expense">Расход</option>
+                  </select>
+                </label>
+                <label>
+                  Дата
+                  <input name="date" type="date" required />
+                </label>
+              </div>
+              <label>
+                Счет
+                <select name="accountId" id="operation-account" required></select>
+              </label>
+              <label>
+                Сумма EUR
+                <input name="amount" type="number" step="0.01" min="0" required placeholder="500" />
+              </label>
+              <label>
+                Комментарий
+                <input name="note" placeholder="оплата поставки, обмен, пополнение" />
+              </label>
+              <button class="primary-button" type="submit">Записать операцию</button>
+            </form>
+
+            <section class="panel">
+              <div class="panel-head">
+                <h3>Итоги по счетам</h3>
+              </div>
+              <div class="account-total-list" id="account-total-list"></div>
+            </section>
+          </div>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Движение денежных средств</h3>
+              <div class="segmented" id="operation-filter" aria-label="Фильтр операций">
+                <button class="active" data-filter="all" type="button">Все</button>
+                <button data-filter="income" type="button">Приход</button>
+                <button data-filter="expense" type="button">Расход</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Дата</th>
+                    <th>Тип</th>
+                    <th>Счет</th>
+                    <th>Сумма EUR</th>
+                    <th>Сумма RUB</th>
+                    <th>Комментарий</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="operations-table"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="goods-view">
+          <section class="panel goods-intro">
+            <div>
+              <p class="eyebrow">Партии и лоты</p>
+              <h3>Заносите закупку сразу несколькими товарами</h3>
+            </div>
+            <button class="primary-button" id="start-batch-button" type="button">Начать ввод партии</button>
+          </section>
+
+          <form class="panel batch-panel hidden" id="goods-batch-form">
+            <div class="panel-head">
+              <h3>Новая партия</h3>
+              <div class="actions">
+                <button class="small-button" id="add-goods-row" type="button">+ Товар</button>
+                <button class="primary-button" type="submit">Сохранить партию</button>
+              </div>
+            </div>
+            <div class="batch-list" id="batch-list"></div>
+          </form>
+
+          <div class="form-grid goods-grid">
+            <section class="panel goods-tools">
+              <div class="panel-head">
+                <h3>Фильтры</h3>
+              </div>
+              <label>
+                Поиск
+                <input id="goods-search" placeholder="артикул, название, цвет, перевозчик" />
+              </label>
+              <label>
+                Статус
+                <select id="goods-status-filter">
+                  <option value="all">Все</option>
+                  <option value="bought">Выкуплен</option>
+                  <option value="in_transit">В доставке</option>
+                  <option value="arrived">Прибыл</option>
+                </select>
+              </label>
+              <div class="goods-totals">
+                <span>Итого по списку</span>
+                <strong id="goods-total-rub">0 ₽</strong>
+                <small id="goods-total-eur">0 €</small>
+              </div>
+            </section>
+
+            <section class="panel goods-tools">
+              <div class="panel-head">
+                <h3>Статусы</h3>
+              </div>
+              <div class="status-summary" id="status-summary"></div>
+            </section>
+          </div>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Товары</h3>
+              <span class="muted" id="goods-count">0 позиций</span>
+            </div>
+            <div class="goods-list" id="goods-list"></div>
+          </section>
+        </section>
+
+        <section class="view" id="arrivals-view">
+          <section class="panel goods-intro">
+            <div>
+              <p class="eyebrow">Приемка</p>
+              <h3>Подтверждайте прибытие выбранных товаров из доставки</h3>
+            </div>
+            <button class="primary-button" id="start-arrival-button" type="button">Начать приемку</button>
+          </section>
+
+          <form class="panel batch-panel hidden" id="arrival-form">
+            <div class="panel-head">
+              <h3>Новая приемка</h3>
+              <div class="actions">
+                <button class="small-button" id="add-arrival-row" type="button">+ Товар</button>
+                <button class="primary-button" type="submit">Подтвердить прибытие</button>
+              </div>
+            </div>
+            <div class="batch-list" id="arrival-list"></div>
+          </form>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Товары в доставке</h3>
+              <span class="muted" id="arrival-pending-count">0 позиций</span>
+            </div>
+            <div class="cards-list" id="arrival-pending"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Журнал прибытия</h3>
+              <span class="muted" id="arrival-count">0 записей</span>
+            </div>
+            <div class="arrival-log" id="arrival-log"></div>
+          </section>
+        </section>
+
+        <section class="view" id="settings-view">
+          <section class="panel settings-panel">
+            <div class="panel-head">
+              <h3>Резервная копия</h3>
+            </div>
+            <p>Данные хранятся в этом браузере. Экспортируйте файл перед переездом на другой компьютер или перед крупными правками.</p>
+            <div class="settings-actions">
+              <button class="primary-button" id="settings-export" type="button">Экспортировать</button>
+              <button class="danger-button" id="reset-demo" type="button">Сбросить данные</button>
+            </div>
+          </section>
+
+          <section class="panel settings-panel">
+            <div class="panel-head">
+              <h3>Облачная синхронизация</h3>
+            </div>
+            <p>Для работы на разных устройствах заполните настройки Supabase в файле <strong>src/supabase-config.js</strong>. После включения данные будут храниться в таблице Supabase, а фото в Storage.</p>
+            <p class="muted">Если настройки не заполнены, приложение автоматически работает локально на этом устройстве.</p>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <template id="empty-template">
+      <div class="empty-state">
+        <strong>Пока пусто</strong>
+        <span>Добавьте первую запись через форму выше.</span>
+      </div>
+    </template>
+
+    <template id="batch-row-template">
+      <article class="batch-row">
+        <div class="batch-row-head">
+          <strong class="batch-row-title">Товар</strong>
+          <button class="delete-button" type="button" data-remove-row title="Удалить строку">×</button>
+        </div>
+        <div class="batch-fields">
+          <label>
+            Дата покупки
+            <input name="purchaseDate" type="date" required />
+          </label>
+          <label>
+            Название
+            <input name="name" required placeholder="iPhone 15 Pro" />
+          </label>
+          <label>
+            Цвет
+            <input name="color" placeholder="черный, белый, синий" />
+          </label>
+          <label>
+            Перевозчик
+            <input name="carrier" placeholder="CDEK, DHL, водитель" />
+          </label>
+          <label>
+            Характеристика
+            <input name="spec" placeholder="256 GB, EU, состояние" />
+          </label>
+          <label>
+            Цена EUR
+            <input name="priceEur" type="number" step="0.01" min="0" placeholder="0" data-calc />
+          </label>
+          <label>
+            Курс цены
+            <input name="priceRate" type="number" step="0.01" min="0" value="100" data-calc />
+          </label>
+          <label>
+            Цена RUB
+            <input name="priceRub" type="text" readonly value="0 ₽" />
+          </label>
+          <label>
+            Доп. затраты EUR
+            <input name="extraEur" type="number" step="0.01" min="0" placeholder="0" data-calc />
+          </label>
+          <label>
+            Курс затрат
+            <input name="extraRate" type="number" step="0.01" min="0" value="100" data-calc />
+          </label>
+          <label>
+            Затраты RUB
+            <input name="extraRub" type="text" readonly value="0 ₽" />
+          </label>
+          <label>
+            Статус
+            <select name="status">
+              <option value="bought">Выкуплен</option>
+              <option value="in_transit">В доставке</option>
+              <option value="arrived">Прибыл</option>
+            </select>
+          </label>
+          <label>
+            Фото единицы
+            <input name="photos" type="file" accept="image/*" multiple />
+          </label>
+        </div>
+      </article>
+    </template>
+
+    <template id="arrival-row-template">
+      <article class="batch-row">
+        <div class="batch-row-head">
+          <strong class="batch-row-title">Прибытие</strong>
+          <button class="delete-button" type="button" data-remove-arrival-row title="Удалить строку">×</button>
+        </div>
+        <div class="batch-fields">
+          <label>
+            Дата прибытия
+            <input name="arrivalDate" type="date" required />
+          </label>
+          <label>
+            Товар в доставке
+            <select name="goodsId" required></select>
+          </label>
+          <label>
+            Доставка EUR
+            <input name="deliveryEur" type="number" step="0.01" min="0" placeholder="0" data-arrival-calc />
+          </label>
+          <label>
+            Курс доставки
+            <input name="deliveryRate" type="number" step="0.01" min="0" value="100" data-arrival-calc />
+          </label>
+          <label>
+            Доставка RUB
+            <input name="deliveryRub" type="number" step="0.01" min="0" placeholder="можно только рубли" />
+          </label>
+          <label>
+            Комментарий
+            <input name="note" placeholder="комплектность, место хранения" />
+          </label>
+        </div>
+      </article>
+    </template>
+
+    <script src="src/supabase-config.js"></script>
+    <script src="src/supabase-sync.js"></script>
+    <script src="src/app.js"></script>
+  </body>
+</html>
