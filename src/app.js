@@ -895,8 +895,13 @@ function addArrivalsBatch(form) {
 }
 
 async function filesToPhotos(files) {
-  const picked = [...files].filter((file) => file.type.startsWith("image/")).slice(0, 8);
+  const picked = [...files].filter(isImageFile).slice(0, 8);
   return Promise.all(picked.map(fileToPhoto));
+}
+
+function isImageFile(file) {
+  if (file.type?.startsWith("image/")) return true;
+  return /\.(jpe?g|png|webp|gif|heic|heif)$/i.test(file.name || "");
 }
 
 function fileToPhoto(file) {
@@ -905,35 +910,21 @@ function fileToPhoto(file) {
     reader.addEventListener("load", () => {
       const image = new Image();
       image.addEventListener("load", () => {
-        const maxSize = 1200;
+        const maxSize = 900;
         const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
         const canvas = document.createElement("canvas");
         canvas.width = Math.max(1, Math.round(image.width * scale));
         canvas.height = Math.max(1, Math.round(image.height * scale));
         const context = canvas.getContext("2d");
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
-        Promise.resolve(window.cloudStore?.uploadPhoto(dataUrl, file.name) || dataUrl)
-          .then((uploaded) => {
-            const src = typeof uploaded === "string" ? uploaded : uploaded?.src || dataUrl;
-            const path = typeof uploaded === "object" && uploaded?.path ? uploaded.path : "";
-            resolve({
-              id: crypto.randomUUID(),
-              src,
-              path,
-              name: file.name,
-              addedAt: TODAY,
-            });
-          })
-          .catch(() =>
-            resolve({
-              id: crypto.randomUUID(),
-              src: dataUrl,
-              path: "",
-              name: file.name,
-              addedAt: TODAY,
-            }),
-          );
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.72);
+        resolve({
+          id: crypto.randomUUID(),
+          src: dataUrl,
+          path: "",
+          name: file.name,
+          addedAt: TODAY,
+        });
       });
       image.addEventListener("error", reject);
       image.src = String(reader.result);
