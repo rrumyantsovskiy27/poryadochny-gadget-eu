@@ -928,7 +928,10 @@ async function addGoodsBatch(form) {
   const rows = [...form.querySelectorAll(".batch-row")];
   let skuNumber = nextSkuNumber();
   const goods = [];
-  const lots = [];
+  const batchLotId = crypto.randomUUID();
+  const batchLotNames = [];
+  const batchLotPhotos = [];
+  let batchLotDate = TODAY;
 
   for (const row of rows) {
     const name = row.querySelector('[name="name"]').value.trim();
@@ -938,17 +941,13 @@ async function addGoodsBatch(form) {
     const quantityValue = Number.parseInt(quantityInput?.value || "1", 10);
     const quantity = Math.min(Math.max(Number.isFinite(quantityValue) ? quantityValue : 1, 1), 500);
     const lotPhotos = await filesToPhotos(row.querySelector('[name="photos"]').files);
-    const lotId = crypto.randomUUID();
-    lots.push({
-      id: lotId,
-      name,
-      createdAt: TODAY,
-      photos: lotPhotos,
-    });
-    expandedLotIds.add(lotId);
+    batchLotNames.push(name);
+    batchLotPhotos.push(...lotPhotos);
     const status = row.querySelector('[name="status"]').value;
+    const purchaseDate = row.querySelector('[name="purchaseDate"]').value || TODAY;
+    if (purchaseDate < batchLotDate) batchLotDate = purchaseDate;
     const baseItem = {
-      purchaseDate: row.querySelector('[name="purchaseDate"]').value || TODAY,
+      purchaseDate,
       name,
       color: row.querySelector('[name="color"]').value.trim(),
       carrier: row.querySelector('[name="carrier"]').value.trim(),
@@ -962,7 +961,7 @@ async function addGoodsBatch(form) {
       deliveryEur: 0,
       deliveryRate: getAverageAccountRate(),
       deliveryRub: 0,
-      lotId,
+      lotId: batchLotId,
     };
 
     for (let index = 0; index < quantity; index += 1) {
@@ -980,7 +979,21 @@ async function addGoodsBatch(form) {
     return;
   }
 
-  state.lots = [...(state.lots || []), ...lots];
+  const uniqueNames = [...new Set(batchLotNames)];
+  const lotName =
+    uniqueNames.length === 1
+      ? uniqueNames[0]
+      : `Лот: ${uniqueNames.slice(0, 3).join(", ")}${uniqueNames.length > 3 ? ` +${uniqueNames.length - 3}` : ""}`;
+  state.lots = [
+    ...(state.lots || []),
+    {
+      id: batchLotId,
+      name: lotName,
+      createdAt: batchLotDate,
+      photos: batchLotPhotos,
+    },
+  ];
+  expandedLotIds.add(batchLotId);
   state.goods.push(...goods);
   goodsFilter = "all";
   goodsSearch = "";
@@ -1319,7 +1332,6 @@ async function saveGoodsEdit(form) {
   item.deliveryRub = num(form.elements.deliveryRub.value);
   const lot = getLot(item.lotId);
   if (lot) {
-    lot.name = item.name;
     lot.photos = [...(lot.photos || []), ...addedPhotos];
   } else {
     item.photos = [...(item.photos || []), ...addedPhotos];
