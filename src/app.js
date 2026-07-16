@@ -210,6 +210,22 @@ function getLotLabel(lotId) {
   return lot?.name || "Без лота";
 }
 
+function getFallbackLotKey(item) {
+  return [
+    item.purchaseDate,
+    item.name,
+    item.color,
+    item.carrier,
+    item.spec,
+    num(item.priceEur),
+    num(item.priceRate),
+    num(item.extraEur),
+    num(item.extraRate),
+  ]
+    .map((part) => String(part || "").toLowerCase())
+    .join("|");
+}
+
 function assignMissingSkus(goods) {
   const used = new Set(goods.map((item) => item.sku).filter(Boolean));
   let next = nextSkuNumber(goods);
@@ -584,7 +600,8 @@ function renderGoods() {
 function groupGoodsByLot(items) {
   const groups = new Map();
   items.forEach((item) => {
-    const key = item.lotId || `single-${item.id}`;
+    const fallbackKey = getFallbackLotKey(item);
+    const key = item.lotId || `fallback-${fallbackKey}`;
     if (!groups.has(key)) {
       const lot = getLot(item.lotId);
       groups.set(key, {
@@ -921,16 +938,14 @@ async function addGoodsBatch(form) {
     const quantityValue = Number.parseInt(quantityInput?.value || "1", 10);
     const quantity = Math.min(Math.max(Number.isFinite(quantityValue) ? quantityValue : 1, 1), 500);
     const lotPhotos = await filesToPhotos(row.querySelector('[name="photos"]').files);
-    const lotId = lotPhotos.length ? crypto.randomUUID() : "";
-    if (lotId) {
-      lots.push({
-        id: lotId,
-        name,
-        createdAt: TODAY,
-        photos: lotPhotos,
-      });
-      expandedLotIds.add(lotId);
-    }
+    const lotId = crypto.randomUUID();
+    lots.push({
+      id: lotId,
+      name,
+      createdAt: TODAY,
+      photos: lotPhotos,
+    });
+    expandedLotIds.add(lotId);
     const status = row.querySelector('[name="status"]').value;
     const baseItem = {
       purchaseDate: row.querySelector('[name="purchaseDate"]').value || TODAY,
@@ -1153,7 +1168,12 @@ async function addPhotosToGoods(goodsId, files) {
     alert("Фото не добавилось. Выберите обычный JPEG/JPG или PNG.");
     return;
   }
-  item.photos = [...(item.photos || []), ...photos];
+  const lot = getLot(item.lotId);
+  if (lot) {
+    lot.photos = [...(lot.photos || []), ...photos];
+  } else {
+    item.photos = [...(item.photos || []), ...photos];
+  }
   commit();
 }
 
@@ -1297,7 +1317,13 @@ async function saveGoodsEdit(form) {
   item.deliveryEur = num(form.elements.deliveryEur.value);
   item.deliveryRate = num(form.elements.deliveryRate.value) || getAverageAccountRate();
   item.deliveryRub = num(form.elements.deliveryRub.value);
-  item.photos = [...(item.photos || []), ...addedPhotos];
+  const lot = getLot(item.lotId);
+  if (lot) {
+    lot.name = item.name;
+    lot.photos = [...(lot.photos || []), ...addedPhotos];
+  } else {
+    item.photos = [...(item.photos || []), ...addedPhotos];
+  }
   form.closest(".edit-viewer")?.remove();
   commit();
 }
