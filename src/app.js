@@ -589,7 +589,9 @@ function renderPhotoGallery(item) {
         .map(
           (photo) => `
             <figure class="photo-thumb">
-              <img src="${photo.src}" alt="${escapeHtml(item.sku)}" />
+              <button class="photo-open" type="button" data-open-photo="${item.id}:${photo.id}" title="Открыть фото">
+                <img src="${photo.src}" alt="${escapeHtml(item.sku)}" />
+              </button>
               <button class="photo-remove" type="button" data-remove-photo="${item.id}:${photo.id}" title="Удалить фото">×</button>
             </figure>
           `,
@@ -648,7 +650,9 @@ function renderArrivalPhotos(arrival) {
         .map(
           (photo) => `
             <figure class="photo-thumb">
-              <img src="${photo.src}" alt="Фото прибытия" />
+              <button class="photo-open" type="button" data-open-arrival-photo="${arrival.id}:${photo.id}" title="Открыть фото">
+                <img src="${photo.src}" alt="Фото прибытия" />
+              </button>
             </figure>
           `,
         )
@@ -929,6 +933,22 @@ function fileToPhoto(file) {
   });
 }
 
+function openPhotoViewer(src, title = "Фото") {
+  if (!src) return;
+  const viewer = document.createElement("div");
+  viewer.className = "photo-viewer";
+  viewer.innerHTML = `
+    <button class="photo-viewer-close" type="button" title="Закрыть">×</button>
+    <img src="${src}" alt="${escapeHtml(title)}" />
+  `;
+  viewer.addEventListener("click", (event) => {
+    if (event.target === viewer || event.target.closest(".photo-viewer-close")) {
+      viewer.remove();
+    }
+  });
+  document.body.append(viewer);
+}
+
 function commit() {
   saveState();
   render();
@@ -1130,6 +1150,22 @@ document.addEventListener("click", (event) => {
       item.photos = (item.photos || []).filter((photo) => photo.id !== photoId);
       commit();
     }
+  }
+
+  const openPhoto = event.target.closest("[data-open-photo]");
+  if (openPhoto) {
+    const [goodsId, photoId] = openPhoto.dataset.openPhoto.split(":");
+    const item = state.goods.find((goods) => goods.id === goodsId);
+    const photo = item?.photos?.find((entry) => entry.id === photoId);
+    openPhotoViewer(photo?.src, item?.sku || "Фото товара");
+  }
+
+  const openArrivalPhoto = event.target.closest("[data-open-arrival-photo]");
+  if (openArrivalPhoto) {
+    const [arrivalId, photoId] = openArrivalPhoto.dataset.openArrivalPhoto.split(":");
+    const arrival = state.arrivals.find((entry) => entry.id === arrivalId);
+    const photo = arrival?.photos?.find((entry) => entry.id === photoId);
+    openPhotoViewer(photo?.src, "Фото прибытия");
   }
 
   const deleteOperation = event.target.closest("[data-delete-operation]");
